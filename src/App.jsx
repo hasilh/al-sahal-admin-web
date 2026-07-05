@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   signin, getToken, saveToken, removeToken,
   getSalesmen, getAllTrackingStatus, getLatestLocations,
@@ -7,16 +7,11 @@ import {
   createSalesman, deleteSalesman, getSalesmanCredentials,
   getSalesLog, getNotPaidSales, approveSalePayment,
   getSalesTarget, setSalesTarget, getSalesmanSummary,
-  setTrackingStatus, pingLocation, logVisit, logDelivery,
-  requestPayment, logSale, requestSalePayment,
+  adminMarkPaid, approveVisitEdit, approveDeliveryEdit,
 } from './api.js';
 
 const COLORS = ['#8E44AD','#2980B9','#16A085','#D35400','#1A5276','#7D6608'];
 
-// Supabase returns "timestamp without time zone" values with no Z/offset suffix
-// (e.g. "2026-07-02T05:00:00"). Browsers then wrongly parse that as *local*
-// browser time instead of UTC. Force it to be read as UTC before converting
-// to Oman time (UTC+4, no DST) for display.
 function asUTC(ts) {
   if (!ts) return null;
   const iso = /[Zz]|[+-]\d\d:\d\d$/.test(ts) ? ts : ts + 'Z';
@@ -24,25 +19,40 @@ function asUTC(ts) {
 }
 
 function formatDate(ts) {
-  const d = asUTC(ts);
-  if (!d) return '';
-  return new Intl.DateTimeFormat('en-GB', {
-    day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
-    hour12: false, timeZone: 'Asia/Muscat',
-  }).format(d).replace(',', ',');
+  const src = asUTC(ts);
+  if (!src) return '';
+  const d = new Date(src.getTime() + (4 * 60 * 60 * 1000));
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const hh = d.getUTCHours().toString().padStart(2,'0');
+  const mm = d.getUTCMinutes().toString().padStart(2,'0');
+  return `${d.getUTCDate()} ${months[d.getUTCMonth()]}, ${hh}:${mm}`;
 }
+
+function formatDateFull(ts) {
+  const src = asUTC(ts);
+  if (!src) return '';
+  const d = new Date(src.getTime() + (4 * 60 * 60 * 1000));
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const hh = d.getUTCHours().toString().padStart(2,'0');
+  const mm = d.getUTCMinutes().toString().padStart(2,'0');
+  return `${days[d.getUTCDay()]} ${d.getUTCDate()} ${months[d.getUTCMonth()]}, ${hh}:${mm}`;
+}
+
 function timeAgo(ts) {
-  const d = asUTC(ts);
-  if (!d) return '';
-  const diff = Math.floor((Date.now() - d.getTime()) / 1000);
+  const src = asUTC(ts);
+  if (!src) return '';
+  const diff = Math.floor((Date.now() - src.getTime()) / 1000);
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
 }
+
 function initials(name) {
-  return (name || '').split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  return (name || '').split(' ').slice(0,2).map(w => w[0]).join('').toUpperCase();
 }
+
 function pmLabel(pm) {
   if (pm === 'bank') return 'Bank Transfer';
   if (pm === 'not_paid') return 'Not Paid';
@@ -50,126 +60,233 @@ function pmLabel(pm) {
   return pm.charAt(0).toUpperCase() + pm.slice(1);
 }
 
-const TABS = [
-  { key: 'salesmen', label: 'Salesmen' },
-  { key: 'visits', label: 'Visits' },
-  { key: 'deliveries', label: 'Deliveries' },
-  { key: 'saleslog', label: 'Sales Log' },
-  { key: 'notpaid', label: 'Not Paid' },
-  { key: 'paid', label: 'Paid' },
-];
+function salesmanColor(id, fallbackName, salesmen) {
+  const idx = salesmen.findIndex(s => s.id === id);
+  if (idx >= 0) return COLORS[idx % COLORS.length];
+  if (fallbackName) {
+    let hash = 0;
+    for (let i = 0; i < fallbackName.length; i++) hash += fallbackName.charCodeAt(i);
+    return COLORS[hash % COLORS.length];
+  }
+  return '#AAB7C4';
+}
+
+const TABS = ['Salesmen','Visits','Deliveries','Sales Log','Not Paid','Paid'];
 const FILTERS = [
-  { key: 'today', label: 'Today' },
-  { key: 'yesterday', label: 'Yesterday' },
-  { key: 'week', label: 'This Week' },
-  { key: 'month', label: 'This Month' },
-  { key: 'older', label: 'Older' },
+  { key:'today', label:'Today' },
+  { key:'yesterday', label:'Yesterday' },
+  { key:'week', label:'This Week' },
+  { key:'month', label:'This Month' },
+  { key:'older', label:'Older' },
 ];
 
-// Defined at module scope (not inside a component) so React treats them as
-// stable component types across re-renders. Defining these inline inside a
-// component body causes React to remount the <input> on every keystroke,
-// which drops focus and makes typing feel like only one letter registers.
 function FilterBar({ selected, onSelect, filters = FILTERS }) {
   return (
-    <div className="filter-row">
+    <div style={{ display:'flex', gap:8, overflowX:'auto', padding:'10px 0 6px' }}>
       {filters.map(f => (
-        <button key={f.key} className={`filter-pill ${selected === f.key ? 'on' : ''}`} onClick={() => onSelect(f.key)}>
+        <button key={f.key} onClick={() => onSelect(f.key)}
+          style={{ padding:'6px 14px', borderRadius:20, border:'1.5px solid',
+            borderColor: selected===f.key ? '#C0392B' : '#DDD',
+            background: selected===f.key ? '#C0392B' : '#fff',
+            color: selected===f.key ? '#fff' : '#5D6D7E',
+            fontWeight:700, fontSize:12, cursor:'pointer', whiteSpace:'nowrap' }}>
           {f.label}
         </button>
       ))}
     </div>
   );
 }
-function SearchBar({ value, onChange, placeholder }) {
+
+function SearchInput({ value, onChange, placeholder }) {
   return (
-    <div className="search-bar">
-      <span>🔍</span>
-      <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
+    <input value={value} onChange={e => onChange(e.target.value)}
+      placeholder={placeholder || 'Search…'}
+      style={{ width:'100%', padding:'10px 14px', borderRadius:12,
+        border:'1px solid #E8EAED', fontSize:13, outline:'none',
+        background:'#F4F5F7', color:'#1A252F', boxSizing:'border-box' }} />
+  );
+}
+
+function Badge({ color, bg, children }) {
+  return (
+    <span style={{ display:'inline-flex', alignItems:'center', padding:'3px 10px',
+      borderRadius:20, background:bg, color, fontSize:11, fontWeight:700 }}>
+      {children}
+    </span>
+  );
+}
+
+function Card({ children, leftColor }) {
+  return (
+    <div style={{ background:'#fff', borderRadius:16, padding:14, marginBottom:10,
+      borderLeft: leftColor ? `4px solid ${leftColor}` : 'none',
+      boxShadow:'0 2px 10px rgba(0,0,0,0.07)' }}>
+      {children}
     </div>
   );
 }
 
-export default function App() {
-  const [checking, setChecking] = useState(true);
-  const [loggedIn, setLoggedIn] = useState(false);
-  const [role, setRole] = useState(null);
-
-  useEffect(() => {
-    const token = getToken();
-    if (token) {
-      try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        setRole(payload.role);
-        setLoggedIn(true);
-      } catch { removeToken(); }
-    }
-    setChecking(false);
-  }, []);
-
-  const handleLoginSuccess = (r) => {
-    setRole(r);
-    setLoggedIn(true);
-  };
-  const handleLogout = () => {
-    removeToken();
-    setLoggedIn(false);
-    setRole(null);
-  };
-
-  if (checking) return <div className="loading-screen"><div className="spinner" /></div>;
-  if (!loggedIn) return <Login onSuccess={handleLoginSuccess} />;
-  return role === 'admin'
-    ? <AdminDashboard onLogout={handleLogout} />
-    : <SalesmanView onLogout={handleLogout} />;
-}
-
-function Login({ onSuccess }) {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  const handleSignIn = async (e) => {
-    e.preventDefault();
-    if (!email || !password) return setError('Please fill all fields');
-    setLoading(true); setError('');
-    try {
-      const data = await signin(email, password);
-      saveToken(data.token);
-      onSuccess(data.role);
-    } catch (err) {
-      setError(err.data?.error || 'Invalid email or password');
-    } finally {
-      setLoading(false);
-    }
-  };
-
+function ModalSheet({ open, onClose, title, children }) {
+  if (!open) return null;
   return (
-    <div className="login-screen">
-      <div className="login-card">
-        <div className="logo-box"><img src="/icon.png" alt="Al Sahal" className="logo-img" /></div>
-        <div className="brand-name">Al Sahal</div>
-        <div className="brand-tag">Sales Tracker Portal</div>
-        <form onSubmit={handleSignIn}>
-          <label className="field-label">Email</label>
-          <input className="field-input" type="email" autoCapitalize="none"
-            value={email} onChange={e => setEmail(e.target.value)} placeholder="you@alsahal.com" />
-          <label className="field-label">Password</label>
-          <input className="field-input" type="password"
-            value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" />
-          {error && <div style={{ color: '#C0392B', fontSize: 12, marginBottom: 12 }}>{error}</div>}
-          <button className="btn-primary" type="submit" disabled={loading}>
-            {loading ? 'Signing in…' : 'Sign In'}
-          </button>
-        </form>
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)',
+      display:'flex', alignItems:'flex-end', justifyContent:'center', zIndex:1000 }}
+      onClick={onClose}>
+      <div style={{ background:'#fff', borderRadius:'24px 24px 0 0', padding:24,
+        width:'100%', maxWidth:520, maxHeight:'90vh', overflowY:'auto' }}
+        onClick={e => e.stopPropagation()}>
+        <div style={{ width:38, height:4, background:'#DDD', borderRadius:2, margin:'0 auto 14px' }} />
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+          <h2 style={{ fontSize:18, fontWeight:800, color:'#C0392B', margin:0 }}>{title}</h2>
+          <button onClick={onClose}
+            style={{ background:'none', border:'none', fontSize:20, cursor:'pointer', color:'#5D6D7E' }}>✕</button>
+        </div>
+        {children}
       </div>
     </div>
   );
 }
 
-function AdminDashboard({ onLogout }) {
-  const [tab, setTab] = useState('salesmen');
+function FormField({ label, required, children }) {
+  return (
+    <div style={{ marginBottom:12 }}>
+      <label style={{ display:'block', fontSize:12, fontWeight:700, color:'#5D6D7E', marginBottom:6 }}>
+        {label}{required && <span style={{ color:'#C0392B' }}> *</span>}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function Input({ value, onChange, placeholder, type='text', style={} }) {
+  return (
+    <input value={value} onChange={e => onChange(e.target.value)}
+      placeholder={placeholder} type={type}
+      style={{ width:'100%', padding:'10px 14px', borderRadius:12,
+        border:'1px solid #E8EAED', fontSize:14, outline:'none',
+        background:'#F4F5F7', color:'#1A252F', boxSizing:'border-box', ...style }} />
+  );
+}
+
+function Btn({ onClick, children, color='#C0392B', disabled, style={} }) {
+  return (
+    <button onClick={onClick} disabled={disabled}
+      style={{ width:'100%', height:50, background: disabled ? '#ccc' : color,
+        color:'#fff', border:'none', borderRadius:14, fontSize:15, fontWeight:800,
+        cursor: disabled ? 'not-allowed' : 'pointer', marginTop:8, ...style }}>
+      {children}
+    </button>
+  );
+}
+
+function InfoBox({ children }) {
+  return (
+    <div style={{ background:'#FFF8E1', borderRadius:10, padding:10,
+      marginTop:8, fontSize:12, color:'#7D6608', lineHeight:1.6 }}>
+      {children}
+    </div>
+  );
+}
+
+function PayTypeSelector({ type, setType, cashT, setCashT }) {
+  return (
+    <div>
+      <div style={{ display:'flex', gap:8 }}>
+        {[['cash','Cash'],['credit','Credit'],['not_paid','Not Paid']].map(([val,lbl]) => (
+          <button key={val} onClick={() => setType(val)}
+            style={{ flex:1, padding:'9px 4px', borderRadius:10,
+              border:`1.5px solid ${type===val ? '#C0392B' : '#DDD'}`,
+              background: type===val ? '#FADBD8' : '#fff',
+              color: type===val ? '#C0392B' : '#5D6D7E',
+              fontWeight:700, fontSize:12, cursor:'pointer' }}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+      {type === 'cash' && (
+        <div style={{ display:'flex', gap:8, marginTop:8 }}>
+          {[['cash','Cash'],['bank','Bank Transfer']].map(([val,lbl]) => (
+            <button key={val} onClick={() => setCashT(val)}
+              style={{ flex:1, padding:'9px 4px', borderRadius:10,
+                border:`1.5px solid ${cashT===val ? '#C0392B' : '#DDD'}`,
+                background: cashT===val ? '#FADBD8' : '#fff',
+                color: cashT===val ? '#C0392B' : '#5D6D7E',
+                fontWeight:700, fontSize:12, cursor:'pointer' }}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  const [authed, setAuthed] = useState(!!getToken());
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [loginError, setLoginError] = useState('');
+
+  const handleLogin = async () => {
+    if (!email || !password) return setLoginError('Please fill all fields');
+    setLoginLoading(true); setLoginError('');
+    try {
+      const data = await signin(email, password);
+      saveToken(data.token);
+      setAuthed(true);
+    } catch (e) {
+      setLoginError(e.data?.error || 'Invalid email or password');
+    } finally { setLoginLoading(false); }
+  };
+
+  const handleLogout = () => { removeToken(); setAuthed(false); };
+
+  if (!authed) {
+    return (
+      <div style={{ minHeight:'100vh', background:'#F4F5F7',
+        display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
+        <div style={{ background:'#fff', borderRadius:20, padding:32,
+          width:'100%', maxWidth:400, boxShadow:'0 4px 24px rgba(0,0,0,0.1)' }}>
+          <div style={{ textAlign:'center', marginBottom:28 }}>
+            <div style={{ width:72, height:72, background:'#C0392B', borderRadius:20,
+              display:'flex', alignItems:'center', justifyContent:'center',
+              margin:'0 auto 12px' }}>
+              <span style={{ color:'#fff', fontSize:26, fontWeight:900 }}>AS</span>
+            </div>
+            <h1 style={{ fontSize:24, fontWeight:900, color:'#C0392B', margin:0 }}>Al Sahal</h1>
+            <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 0' }}>
+              Sales Tracker · Web Dashboard
+            </p>
+          </div>
+          {loginError && (
+            <div style={{ background:'#FADBD8', borderRadius:10, padding:'10px 14px',
+              color:'#A93226', fontSize:13, marginBottom:12 }}>
+              {loginError}
+            </div>
+          )}
+          <FormField label="Email" required>
+            <Input value={email} onChange={setEmail} placeholder="you@alsahal.com" type="email" />
+          </FormField>
+          <FormField label="Password" required>
+            <Input value={password} onChange={setPassword} placeholder="••••••••" type="password" />
+          </FormField>
+          <Btn onClick={handleLogin} disabled={loginLoading}>
+            {loginLoading ? 'Signing in…' : 'Sign In'}
+          </Btn>
+          <p style={{ textAlign:'center', color:'#AAB7C4', fontSize:12, marginTop:16 }}>
+            Contact your admin if you don't have access
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return <Dashboard onLogout={handleLogout} />;
+}
+
+function Dashboard({ onLogout }) {
+  const [tab, setTab] = useState('Salesmen');
   const [salesmen, setSalesmen] = useState([]);
   const [trackingStatus, setTrackingStatus] = useState([]);
   const [locations, setLocations] = useState([]);
@@ -181,29 +298,60 @@ function AdminDashboard({ onLogout }) {
   const [paid, setPaid] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
 
   const [visitFilter, setVisitFilter] = useState('today');
   const [deliveryFilter, setDeliveryFilter] = useState('today');
   const [salesLogFilter, setSalesLogFilter] = useState('today');
+  const [paidFilter, setPaidFilter] = useState('month');
   const [visitSearch, setVisitSearch] = useState('');
   const [deliverySearch, setDeliverySearch] = useState('');
   const [salesLogSearch, setSalesLogSearch] = useState('');
   const [notPaidSearch, setNotPaidSearch] = useState('');
   const [paidSearch, setPaidSearch] = useState('');
-  const [paidFilter, setPaidFilter] = useState('month');
 
-  const [notifModal, setNotifModal] = useState(false);
-  const [addModal, setAddModal] = useState(false);
-  const [detailModal, setDetailModal] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
   const [selectedSalesman, setSelectedSalesman] = useState(null);
+  const [salesmanVisits, setSalesmanVisits] = useState([]);
+  const [salesmanDeliveries, setSalesmanDeliveries] = useState([]);
+  const [detailFilter, setDetailFilter] = useState('today');
+  const [credentials, setCredentials] = useState(null);
+  const [credLoading, setCredLoading] = useState(false);
+  const [salesmanTarget, setSalesmanTarget] = useState({ target_amount:0, achieved_amount:0 });
+  const [targetInput, setTargetInput] = useState('');
+  const [targetSaving, setTargetSaving] = useState(false);
+  const [salesmanSummary, setSalesmanSummary] = useState(null);
+
+  const [adminPayOpen, setAdminPayOpen] = useState(false);
+  const [adminPayInv, setAdminPayInv] = useState(null);
+  const [adminPayType, setAdminPayType] = useState('cash');
+  const [adminCashType, setAdminCashType] = useState('cash');
 
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [newTarget, setNewTarget] = useState('');
   const [addLoading, setAddLoading] = useState(false);
-  const [credentials, setCredentials] = useState(null);
-  const [credLoading, setCredLoading] = useState(false);
+
+  useEffect(() => {
+    loadAll();
+    const iv = setInterval(loadAll, 30000);
+    return () => clearInterval(iv);
+  }, []);
+
+  useEffect(() => { loadVisits(); }, [visitFilter]);
+  useEffect(() => { loadDeliveries(); }, [deliveryFilter]);
+  useEffect(() => { loadSalesLogAll(); }, [salesLogFilter]);
+  useEffect(() => { loadPaid(); }, [paidFilter]);
+  useEffect(() => {
+    if (selectedSalesman?.id) {
+      loadSalesmanDetail();
+      loadSalesmanSummary();
+      loadSalesmanTarget();
+    }
+  }, [detailFilter, selectedSalesman?.id]);
 
   const loadAll = async () => {
     try {
@@ -215,56 +363,91 @@ function AdminDashboard({ onLogout }) {
       setNotPaid(np); setNotPaidSales(nps); setNotifications(notifs);
       setUnreadCount(notifs.filter(n => !n.is_read).length);
     } catch (e) {
-      if (e.status === 401) { removeToken(); onLogout(); }
+      console.log('loadAll error:', e);
+      if (e.status === 401) { removeToken(); window.location.reload(); }
     }
   };
 
-  useEffect(() => {
-    loadAll();
-    const iv = setInterval(loadAll, 30000);
-    return () => clearInterval(iv);
-  }, []);
-
-  useEffect(() => { getVisits(visitFilter).then(setAllVisits).catch(() => {}); }, [visitFilter]);
-  useEffect(() => { getDeliveries(deliveryFilter).then(setAllDeliveries).catch(() => {}); }, [deliveryFilter]);
-  useEffect(() => { getSalesLog(salesLogFilter).then(setAllSalesLog).catch(() => {}); }, [salesLogFilter]);
-  useEffect(() => { getPaidInvoices(paidFilter).then(setPaid).catch(() => {}); }, [paidFilter]);
-
-  const handleOpenNotifs = async () => {
-    setNotifModal(true);
-    await markNotificationsRead();
-    setUnreadCount(0);
-    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+  const loadVisits = async () => {
+    try { setAllVisits(await getVisits(visitFilter)); } catch {}
+  };
+  const loadDeliveries = async () => {
+    try { setAllDeliveries(await getDeliveries(deliveryFilter)); } catch {}
+  };
+  const loadSalesLogAll = async () => {
+    try { setAllSalesLog(await getSalesLog(salesLogFilter)); } catch {}
+  };
+  const loadPaid = async () => {
+    try { setPaid(await getPaidInvoices(paidFilter)); } catch {}
   };
 
-  const handleAddSalesman = async (e) => {
-    e.preventDefault();
-    if (!newName || !newEmail || !newPassword) return alert('All fields are required');
+  const loadSalesmanDetail = async () => {
+    if (!selectedSalesman) return;
+    try {
+      const [v, d] = await Promise.all([
+        getVisits(detailFilter === 'all' ? undefined : detailFilter, selectedSalesman.id),
+        getDeliveries(detailFilter === 'all' ? undefined : detailFilter, selectedSalesman.id),
+      ]);
+      setSalesmanVisits(v || []); setSalesmanDeliveries(d || []);
+    } catch (e) { console.log(e); }
+  };
+
+  const loadSalesmanSummary = async () => {
+    if (!selectedSalesman) return;
+    try { setSalesmanSummary(await getSalesmanSummary(selectedSalesman.id)); } catch {}
+  };
+
+  const loadSalesmanTarget = async () => {
+    if (!selectedSalesman) return;
+    try {
+      const data = await getSalesTarget(selectedSalesman.id);
+      setSalesmanTarget(data);
+      setTargetInput(String(data.target_amount || ''));
+    } catch {}
+  };
+
+  const handleSaveTarget = async () => {
+    const amount = Number(targetInput);
+    if (isNaN(amount) || amount < 0) return alert('Enter a valid target amount');
+    setTargetSaving(true);
+    try {
+      const month = new Date().toISOString().slice(0,7) + '-01';
+      await setSalesTarget(selectedSalesman.id, month, amount);
+      await loadSalesmanTarget();
+    } catch { alert('Failed to save target'); }
+    finally { setTargetSaving(false); }
+  };
+
+  const handleOpenNotifs = async () => {
+    setNotifOpen(true);
+    await markNotificationsRead();
+    setUnreadCount(0);
+    setNotifications(prev => prev.map(n => ({ ...n, is_read:true })));
+  };
+
+  const handleAddSalesman = async () => {
+    if (!newName || !newEmail || !newPassword) return alert('All fields required');
     setAddLoading(true);
     try {
       const res = await createSalesman(newName, newEmail, newPassword);
       if (newTarget && Number(newTarget) > 0) {
-        const month = new Date().toISOString().slice(0, 7) + '-01';
+        const month = new Date().toISOString().slice(0,7) + '-01';
         await setSalesTarget(res.user.id, month, Number(newTarget));
       }
-      setAddModal(false);
+      setAddOpen(false);
       setNewName(''); setNewEmail(''); setNewPassword(''); setNewTarget('');
-      setSalesmen(await getSalesmen());
-      setTrackingStatus(await getAllTrackingStatus());
-      alert(`Account created for ${newName}`);
-    } catch (e) {
-      alert(e.data?.error || 'Failed to create account');
-    } finally { setAddLoading(false); }
+      await loadAll();
+    } catch (e) { alert(e.data?.error || 'Failed to create account'); }
+    finally { setAddLoading(false); }
   };
 
   const handleDeleteSalesman = async (s) => {
-    if (!confirm(`Delete ${s.name}? Their visit and delivery records will be kept.`)) return;
+    if (!window.confirm(`Delete ${s.name}? Their records will be kept.`)) return;
     try {
       await deleteSalesman(s.id);
-      setSalesmen(await getSalesmen());
-      setTrackingStatus(await getAllTrackingStatus());
-      setDetailModal(false);
-    } catch { alert('Failed to delete salesman'); }
+      setDetailOpen(false);
+      await loadAll();
+    } catch { alert('Failed to delete'); }
   };
 
   const handleViewCredentials = async (s) => {
@@ -274,936 +457,787 @@ function AdminDashboard({ onLogout }) {
     finally { setCredLoading(false); }
   };
 
+  const handleAdminMarkPaid = async () => {
+    const pm = adminPayType === 'cash' ? adminCashType : adminPayType;
+    try {
+      await adminMarkPaid(adminPayInv.id, pm);
+      setNotPaid(p => p.filter(i => i.id !== adminPayInv.id));
+      setAdminPayOpen(false);
+      loadPaid(); loadAll();
+    } catch { alert('Failed to mark as paid'); }
+  };
+
+  const handleApproveEdit = async (type, id, approve) => {
+    try {
+      if (type === 'visit') await approveVisitEdit(id, approve);
+      else await approveDeliveryEdit(id, approve);
+      await loadVisits(); await loadDeliveries();
+    } catch { alert('Failed to process edit'); }
+  };
+
   const handleApprove = async (inv) => {
-    if (!confirm(`Approve ${inv.invoice_number}?`)) return;
+    if (!window.confirm(`Approve ${inv.invoice_number}?`)) return;
     try {
       if (inv._source === 'sales') {
         await approveSalePayment(inv.id);
-        setNotPaidSales(prev => prev.filter(i => i.id !== inv.id));
+        setNotPaidSales(p => p.filter(i => i.id !== inv.id));
       } else {
         await approvePayment(inv.id);
-        setNotPaid(prev => prev.filter(i => i.id !== inv.id));
+        setNotPaid(p => p.filter(i => i.id !== inv.id));
       }
-      getPaidInvoices(paidFilter).then(setPaid);
-      loadAll();
+      loadPaid(); loadAll();
     } catch { alert('Failed to approve'); }
   };
 
-  const openMap = (lat, lng, name) =>
-    window.open(`https://www.google.com/maps?q=${lat},${lng}&label=${name}`, '_blank');
+  const openMap = (lat, lng, label) =>
+    window.open(`https://www.google.com/maps?q=${lat},${lng}&label=${label}`, '_blank');
 
   const getTracking = (id) => trackingStatus.find(t => t.user_id === id);
   const getLocation = (id) => locations.find(l => l.user_id === id);
 
-  const searchFilter = (list, term, keys) => {
+  function searchFilter(list, term, keys) {
     if (!term.trim()) return list;
     const t = term.toLowerCase();
-    return list.filter(item => keys.some(k => (item[k] || item.users?.name || '').toLowerCase().includes(t)));
-  };
+    return list.filter(item =>
+      keys.some(k => (item[k] || item.users?.name || '').toLowerCase().includes(t))
+    );
+  }
+
+  function EditPendingSection({ item, type }) {
+    if (item.edit_status !== 'pending') return null;
+    let pending = {};
+    try { pending = JSON.parse(item.pending_edit || '{}'); } catch {}
+    return (
+      <div style={{ background:'#FFF8E1', borderRadius:10, padding:10, marginTop:8 }}>
+        <p style={{ fontSize:11, fontWeight:700, color:'#7D6608', margin:'0 0 4px' }}>
+          ⏳ Edit requested by {pending.requested_by}
+        </p>
+        {Object.entries(pending.proposed || {}).map(([k,v]) => (
+          <p key={k} style={{ fontSize:11, color:'#5D6D7E', margin:'2px 0' }}>
+            {k.replace(/_/g,' ')}: {String(v)}
+          </p>
+        ))}
+        <div style={{ display:'flex', gap:8, marginTop:8 }}>
+          <button onClick={() => handleApproveEdit(type, item.id, true)}
+            style={{ flex:1, padding:'8px 0', background:'#27AE60', color:'#fff',
+              border:'none', borderRadius:10, fontWeight:700, cursor:'pointer', fontSize:12 }}>
+            ✓ Approve Edit
+          </button>
+          <button onClick={() => handleApproveEdit(type, item.id, false)}
+            style={{ flex:1, padding:'8px 0', background:'#EA4335', color:'#fff',
+              border:'none', borderRadius:10, fontWeight:700, cursor:'pointer', fontSize:12 }}>
+            ✗ Reject
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const filteredVisits = searchFilter(allVisits, visitSearch, ['company_name','contact_name','mobile','email_id']);
-  const filteredDeliveries = searchFilter(allDeliveries, deliverySearch, ['invoice_number','delivered_person','payment_method']);
+  const filteredDeliveries = searchFilter(allDeliveries, deliverySearch, ['invoice_number','company_name','delivered_person','payment_method']);
   const filteredSalesLog = searchFilter(allSalesLog, salesLogSearch, ['invoice_number','delivered_to','payment_method']);
   const mergedNotPaid = [
-    ...notPaid.map(i => ({ ...i, _source: 'delivery', _to: i.delivered_person })),
-    ...notPaidSales.map(i => ({ ...i, _source: 'sales', _to: i.delivered_to })),
-  ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    ...notPaid.map(i => ({ ...i, _source:'delivery', _to: i.delivered_person })),
+    ...notPaidSales.map(i => ({ ...i, _source:'sales', _to: i.delivered_to })),
+  ].sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
   const filteredNotPaid = searchFilter(mergedNotPaid, notPaidSearch, ['invoice_number','_to']);
   const filteredPaid = searchFilter(paid, paidSearch, ['invoice_number','delivered_person','payment_method']);
 
-  const salesmanColor = (id, fallbackName) => {
-    const idx = salesmen.findIndex(s => s.id === id);
-    if (idx >= 0) return COLORS[idx % COLORS.length];
-    if (fallbackName) {
-      let hash = 0;
-      for (let i = 0; i < fallbackName.length; i++) hash += fallbackName.charCodeAt(i);
-      return COLORS[hash % COLORS.length];
-    }
-    return '#AAB7C4';
-  };
+  const notPaidCount = notPaid.filter(i => i.status==='not_paid').length
+    + notPaidSales.filter(i => i.status==='not_paid').length;
 
   return (
-    <div className="app-container">
-      <div className="header">
+    <div style={{ minHeight:'100vh', background:'#F4F5F7',
+      fontFamily:'-apple-system, BlinkMacSystemFont, "SF Pro Display", sans-serif' }}>
+
+      {/* Header */}
+      <div style={{ background:'#fff', borderBottom:'1px solid #EBEBEB',
+        padding:'20px 24px', display:'flex', alignItems:'center',
+        justifyContent:'space-between', position:'sticky', top:0, zIndex:100 }}>
         <div>
-          <h1>Admin Dashboard</h1>
-          <div className="sub">Al Sahal Printing Press</div>
+          <h1 style={{ margin:0, fontSize:20, fontWeight:900, color:'#1A252F' }}>Admin Dashboard</h1>
+          <p style={{ margin:0, fontSize:12, color:'#5D6D7E' }}>Al Sahal Printing Press</p>
         </div>
-        <div className="header-actions">
-          <button className="icon-btn" onClick={handleOpenNotifs}>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          <button onClick={handleOpenNotifs}
+            style={{ position:'relative', background:'none', border:'none', fontSize:24, cursor:'pointer' }}>
             🔔
-            {unreadCount > 0 && <span className="badge-count">{unreadCount > 9 ? '9+' : unreadCount}</span>}
+            {unreadCount > 0 && (
+              <span style={{ position:'absolute', top:0, right:0, background:'#C0392B',
+                color:'#fff', borderRadius:8, minWidth:16, height:16,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                fontSize:9, fontWeight:800, border:'2px solid #fff' }}>
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </span>
+            )}
           </button>
-          <button className="logout-btn" onClick={() => {
-            if (confirm('Sign out?')) { removeToken(); onLogout(); }
-          }}>Sign Out</button>
+          <button onClick={onLogout}
+            style={{ padding:'6px 14px', borderRadius:8, border:'1px solid #DDD',
+              background:'none', color:'#EA4335', fontWeight:700, fontSize:12, cursor:'pointer' }}>
+            Sign Out
+          </button>
         </div>
       </div>
 
-      <div className="stats-row">
-        <div className="stat-card" style={{ borderTopColor: '#2C3E50' }}>
-          <div className="stat-val" style={{ color: '#2C3E50' }}>{salesmen.length}</div>
-          <div className="stat-lbl">Salesmen</div>
-        </div>
-        <div className="stat-card" style={{ borderTopColor: '#27AE60' }}>
-          <div className="stat-val" style={{ color: '#27AE60' }}>{trackingStatus.filter(t => t.is_tracking).length}</div>
-          <div className="stat-lbl">Active</div>
-        </div>
-        <div className="stat-card" style={{ borderTopColor: '#C0392B' }}>
-          <div className="stat-val" style={{ color: '#C0392B' }}>
-            {notPaid.filter(i => i.status === 'not_paid').length + notPaidSales.filter(i => i.status === 'not_paid').length}
+      {/* Stat cards */}
+      <div style={{ display:'flex', gap:12, padding:'16px 24px',
+        background:'#fff', borderBottom:'1px solid #EBEBEB' }}>
+        {[
+          { label:'Salesmen', val: salesmen.length, color:'#2C3E50' },
+          { label:'Active Now', val: trackingStatus.filter(t => t.is_tracking).length, color:'#27AE60' },
+          { label:'Not Paid', val: notPaidCount, color:'#C0392B' },
+        ].map(s => (
+          <div key={s.label} style={{ flex:1, background:'#F4F5F7', borderRadius:14,
+            padding:'14px 16px', borderTop:`3px solid ${s.color}` }}>
+            <div style={{ fontSize:24, fontWeight:800, color:s.color }}>{s.val}</div>
+            <div style={{ fontSize:11, fontWeight:700, color:'#5D6D7E',
+              textTransform:'uppercase', letterSpacing:0.5, marginTop:3 }}>
+              {s.label}
+            </div>
           </div>
-          <div className="stat-lbl">Not Paid</div>
-        </div>
-      </div>
-
-      <div className="tabs">
-        {TABS.map(t => (
-          <button key={t.key} className={`tab ${tab === t.key ? 'on' : ''}`} onClick={() => setTab(t.key)}>{t.label}</button>
         ))}
       </div>
 
-      <div className="content">
-        {tab === 'salesmen' && (
+      {/* Tab nav */}
+      <div style={{ background:'#fff', borderBottom:'1px solid #EBEBEB',
+        display:'flex', overflowX:'auto', padding:'0 24px' }}>
+        {TABS.map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            style={{ padding:'12px 16px', border:'none',
+              borderBottom: tab===t ? '2.5px solid #C0392B' : '2.5px solid transparent',
+              background:'none', fontWeight:700, fontSize:13,
+              color: tab===t ? '#C0392B' : '#5D6D7E',
+              cursor:'pointer', whiteSpace:'nowrap' }}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ padding:'16px 24px', maxWidth:1200, margin:'0 auto' }}>
+
+        {/* ── Salesmen ── */}
+        {tab === 'Salesmen' && (
           <>
-            <button className="add-sales-btn" onClick={() => setAddModal(true)}>+ Add New Salesman</button>
-            <div className="sales-grid">
+            <button onClick={() => setAddOpen(true)}
+              style={{ width:'100%', height:48, background:'#C0392B', color:'#fff',
+                border:'none', borderRadius:14, fontWeight:800, fontSize:14,
+                cursor:'pointer', marginBottom:16 }}>
+              + Add New Salesman
+            </button>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px,1fr))', gap:12 }}>
               {salesmen.map((s, i) => {
                 const tr = getTracking(s.id);
                 const loc = getLocation(s.id);
                 const isOn = tr?.is_tracking;
                 const col = COLORS[i % COLORS.length];
                 return (
-                  <button key={s.id} className="sales-card" style={{ borderLeftColor: col }}
-                    onClick={() => { setSelectedSalesman(s); setDetailModal(true); setCredentials(null); }}>
-                    <div className="sales-card-top">
-                      <div className="av" style={{ background: col }}>{initials(s.name)}</div>
-                      <div className="track-dot-wrap" style={{ background: isOn ? '#D5F5E3' : '#FADBD8' }}>
-                        <div className="track-dot" style={{ background: isOn ? '#27AE60' : '#EA4335' }} />
+                  <div key={s.id}
+                    onClick={() => { setSelectedSalesman(s); setDetailFilter('today'); setDetailOpen(true); }}
+                    style={{ background:'#fff', borderRadius:14, padding:16,
+                      borderLeft:`4px solid ${col}`,
+                      boxShadow:'0 2px 10px rgba(0,0,0,0.07)', cursor:'pointer' }}>
+                    <div style={{ display:'flex', justifyContent:'space-between',
+                      alignItems:'center', marginBottom:10 }}>
+                      <div style={{ width:36, height:36, borderRadius:'50%', background:col,
+                        display:'flex', alignItems:'center', justifyContent:'center',
+                        color:'#fff', fontWeight:800, fontSize:13 }}>
+                        {initials(s.name)}
+                      </div>
+                      <div style={{ width:22, height:22, borderRadius:'50%',
+                        background: isOn ? '#D5F5E3' : '#FADBD8',
+                        display:'flex', alignItems:'center', justifyContent:'center' }}>
+                        <div style={{ width:8, height:8, borderRadius:'50%',
+                          background: isOn ? '#27AE60' : '#EA4335' }} />
                       </div>
                     </div>
-                    <div className="sales-name">{s.name}</div>
-                    <div className="sales-sub">{isOn ? 'Tracking ON' : 'Tracking OFF'}</div>
+                    <div style={{ fontWeight:700, fontSize:13, color:'#1A252F' }}>{s.name}</div>
+                    <div style={{ fontSize:11, color:'#5D6D7E', marginTop:2 }}>
+                      {isOn ? 'Tracking ON' : 'Tracking OFF'}
+                    </div>
                     {loc && isOn && (
-                      <span className="map-btn" onClick={(e) => { e.stopPropagation(); openMap(loc.lat, loc.lng, s.name); }}>📍 Live location</span>
+                      <button onClick={e => { e.stopPropagation(); openMap(loc.lat, loc.lng, s.name); }}
+                        style={{ marginTop:8, padding:'5px 10px', background:'#F4F5F7',
+                          border:'1px solid #DDD', borderRadius:8, fontSize:11,
+                          fontWeight:700, color:'#C0392B', cursor:'pointer' }}>
+                        📍 Live location
+                      </button>
                     )}
-                  </button>
+                  </div>
                 );
               })}
             </div>
           </>
         )}
 
-        {tab === 'visits' && (
+        {/* ── Visits ── */}
+        {tab === 'Visits' && (
           <>
             <FilterBar selected={visitFilter} onSelect={setVisitFilter} />
-            <SearchBar value={visitSearch} onChange={setVisitSearch} placeholder="Search company, salesman, contact…" />
-            <div className="result-count">{filteredVisits.length} visits</div>
+            <SearchInput value={visitSearch} onChange={setVisitSearch}
+              placeholder="Search company, salesman, contact…" />
+            <p style={{ fontSize:11, color:'#5D6D7E', margin:'8px 0' }}>
+              {filteredVisits.length} visits
+            </p>
             {filteredVisits.map(v => {
-              const col = salesmanColor(v.user_id, v.salesman_name);
+              const col = salesmanColor(v.user_id, v.salesman_name, salesmen);
               return (
-                <div key={v.id} className="card" style={{ borderLeftColor: col }}>
-                  <div className="card-top-row">
-                    <div className="card-title">{v.company_name}</div>
-                    <span className="tag-badge" style={{ background: col + '22', color: col }}>
+                <Card key={v.id} leftColor={col}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                    <strong style={{ fontSize:14, color:'#1A252F' }}>{v.company_name}</strong>
+                    <span style={{ padding:'3px 8px', borderRadius:20,
+                      background:col+'22', color:col, fontSize:10, fontWeight:800, marginLeft:8 }}>
                       {v.users?.name?.split(' ')[0] || v.salesman_name?.split(' ')[0] || 'Deleted'}
                     </span>
                   </div>
-                  <div className="card-detail">{v.contact_name} · {v.mobile}</div>
-                  {v.email_id && <div className="card-detail">{v.email_id}</div>}
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 2px' }}>
+                    {v.contact_name} · {v.mobile}
+                  </p>
+                  {v.email_id && <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>{v.email_id}</p>}
                   {v.quotation && (
-                    <span className="status-badge" style={{ background: '#EAF0FB', color: '#1A5276' }}>
-                      Quotation: {v.quotation_description}
-                    </span>
+                    <Badge color="#1A5276" bg="#EAF0FB">Quotation: {v.quotation_description}</Badge>
                   )}
                   {v.lat && v.lng && (
-                    <div><span className="map-btn" onClick={() => openMap(v.lat, v.lng, v.company_name)}>📍 View visit location</span></div>
+                    <button onClick={() => openMap(v.lat, v.lng, v.company_name)}
+                      style={{ marginTop:8, padding:'5px 10px', background:'#F4F5F7',
+                        border:'1px solid #DDD', borderRadius:8, fontSize:11,
+                        fontWeight:700, color:'#C0392B', cursor:'pointer', display:'block' }}>
+                      📍 View visit location
+                    </button>
                   )}
-                  <div className="card-time">{formatDate(v.visited_at)}</div>
-                </div>
+                  <EditPendingSection item={v} type="visit" />
+                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
+                    {formatDate(v.visited_at)}
+                  </p>
+                </Card>
               );
             })}
-            {filteredVisits.length === 0 && <div className="empty">No visits found</div>}
+            {filteredVisits.length === 0 && (
+              <p style={{ textAlign:'center', color:'#AAB7C4', marginTop:40 }}>No visits found</p>
+            )}
           </>
         )}
 
-        {tab === 'deliveries' && (
+        {/* ── Deliveries ── */}
+        {tab === 'Deliveries' && (
           <>
             <FilterBar selected={deliveryFilter} onSelect={setDeliveryFilter} />
-            <SearchBar value={deliverySearch} onChange={setDeliverySearch} placeholder="Search invoice, salesman, company…" />
-            <div className="result-count">{filteredDeliveries.length} deliveries</div>
+            <SearchInput value={deliverySearch} onChange={setDeliverySearch}
+              placeholder="Search invoice, salesman, company…" />
+            <p style={{ fontSize:11, color:'#5D6D7E', margin:'8px 0' }}>
+              {filteredDeliveries.length} deliveries
+            </p>
             {filteredDeliveries.map(d => {
-              const col = salesmanColor(d.user_id, d.salesman_name);
-              const sc = d.status === 'paid' ? { bg: '#D5F5E3', txt: '#145A32', lbl: '✓ Paid' }
-                : d.status === 'pending_approval' ? { bg: '#FDEBD0', txt: '#784212', lbl: '⏳ Pending' }
-                : { bg: '#FADBD8', txt: '#A93226', lbl: '✗ Not Paid' };
+              const col = salesmanColor(d.user_id, d.salesman_name, salesmen);
+              const sc = d.status==='paid'
+                ? { bg:'#D5F5E3', txt:'#145A32', lbl:'✓ Paid' }
+                : d.status==='pending_approval'
+                ? { bg:'#FDEBD0', txt:'#784212', lbl:'⏳ Pending' }
+                : { bg:'#FADBD8', txt:'#922B21', lbl:'✗ Not Paid' };
               return (
-                <div key={d.id} className="card" style={{ borderLeftColor: col }}>
-                  <div className="card-top-row">
-                    <div className="card-title">{d.invoice_number}</div>
-                    <span className="tag-badge" style={{ background: col + '22', color: col }}>
+                <Card key={d.id} leftColor={col}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                    <strong style={{ fontSize:14, color:'#1A252F' }}>{d.invoice_number}</strong>
+                    <span style={{ padding:'3px 8px', borderRadius:20,
+                      background:col+'22', color:col, fontSize:10, fontWeight:800, marginLeft:8 }}>
                       {d.users?.name?.split(' ')[0] || d.salesman_name?.split(' ')[0] || 'Deleted'}
                     </span>
                   </div>
-                  <div className="card-detail">Delivered to: {d.delivered_person}</div>
-                  <div className="card-detail">Payment: {pmLabel(d.payment_method)}</div>
-                  <span className="status-badge" style={{ background: sc.bg, color: sc.txt }}>{sc.lbl}</span>
-                  {d.lat && d.lng && (
-                    <div><span className="map-btn" onClick={() => openMap(d.lat, d.lng, d.invoice_number)}>📍 View delivery location</span></div>
+                  {d.company_name && (
+                    <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 2px' }}>
+                      Company: {d.company_name}
+                    </p>
                   )}
-                  <div className="card-time">{formatDate(d.created_at)}</div>
-                </div>
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    Delivered to: {d.delivered_person}
+                  </p>
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    Payment: {pmLabel(d.payment_method)}
+                  </p>
+                  <Badge color={sc.txt} bg={sc.bg}>{sc.lbl}</Badge>
+                  {d.lat && d.lng && (
+                    <button onClick={() => openMap(d.lat, d.lng, d.invoice_number)}
+                      style={{ marginTop:8, padding:'5px 10px', background:'#F4F5F7',
+                        border:'1px solid #DDD', borderRadius:8, fontSize:11,
+                        fontWeight:700, color:'#C0392B', cursor:'pointer', display:'block' }}>
+                      📍 View delivery location
+                    </button>
+                  )}
+                  <EditPendingSection item={d} type="delivery" />
+                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
+                    {formatDate(d.created_at)}
+                  </p>
+                </Card>
               );
             })}
-            {filteredDeliveries.length === 0 && <div className="empty">No deliveries found</div>}
+            {filteredDeliveries.length === 0 && (
+              <p style={{ textAlign:'center', color:'#AAB7C4', marginTop:40 }}>No deliveries found</p>
+            )}
           </>
         )}
 
-        {tab === 'saleslog' && (
+        {/* ── Sales Log ── */}
+        {tab === 'Sales Log' && (
           <>
             <FilterBar selected={salesLogFilter} onSelect={setSalesLogFilter} />
-            <SearchBar value={salesLogSearch} onChange={setSalesLogSearch} placeholder="Search invoice, salesman, recipient…" />
-            <div className="result-count">{filteredSalesLog.length} sales</div>
+            <SearchInput value={salesLogSearch} onChange={setSalesLogSearch}
+              placeholder="Search invoice, salesman, recipient…" />
+            <p style={{ fontSize:11, color:'#5D6D7E', margin:'8px 0' }}>
+              {filteredSalesLog.length} sales
+            </p>
             {filteredSalesLog.map(s => {
-              const col = salesmanColor(s.user_id, s.salesman_name);
-              const sc = s.status === 'paid' ? { bg: '#D5F5E3', txt: '#145A32', lbl: '✓ Paid' }
-                : s.status === 'pending_approval' ? { bg: '#FDEBD0', txt: '#784212', lbl: '⏳ Pending' }
-                : { bg: '#FADBD8', txt: '#A93226', lbl: '✗ Not Paid' };
+              const col = salesmanColor(s.user_id, s.salesman_name, salesmen);
+              const sc = s.status==='paid'
+                ? { bg:'#D5F5E3', txt:'#145A32', lbl:'✓ Paid' }
+                : s.status==='pending_approval'
+                ? { bg:'#FDEBD0', txt:'#784212', lbl:'⏳ Pending' }
+                : { bg:'#FADBD8', txt:'#922B21', lbl:'✗ Not Paid' };
               return (
-                <div key={s.id} className="card" style={{ borderLeftColor: col }}>
-                  <div className="card-top-row">
-                    <div className="card-title">
-                      {s.invoice_number}
+                <Card key={s.id} leftColor={col}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <strong style={{ fontSize:14, color:'#1A252F' }}>{s.invoice_number}</strong>
                       {s.source === 'delivery' && (
-                        <span className="tag-badge" style={{ background: '#F4ECFB', color: '#5B2C6F', marginLeft: 8 }}>From Delivery</span>
+                        <Badge color="#5B2C6F" bg="#F4ECFB">From Delivery</Badge>
                       )}
                     </div>
-                    <span className="tag-badge" style={{ background: col + '22', color: col }}>
+                    <span style={{ padding:'3px 8px', borderRadius:20,
+                      background:col+'22', color:col, fontSize:10, fontWeight:800 }}>
                       {s.users?.name?.split(' ')[0] || s.salesman_name?.split(' ')[0] || 'Deleted'}
                     </span>
                   </div>
-                  <div className="card-detail">Delivered to: {s.delivered_to}</div>
-                  <div className="card-detail">Amount: {Number(s.amount || 0).toFixed(2)} OMR</div>
-                  <div className="card-detail">Payment: {pmLabel(s.payment_method)}</div>
-                  <span className="status-badge" style={{ background: sc.bg, color: sc.txt }}>{sc.lbl}</span>
-                  <div className="card-time">{formatDate(s.created_at)}</div>
-                </div>
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 2px' }}>
+                    Delivered to: {s.delivered_to}
+                  </p>
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    Amount: {Number(s.amount||0).toFixed(2)} OMR
+                  </p>
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    Payment: {pmLabel(s.payment_method)}
+                  </p>
+                  <Badge color={sc.txt} bg={sc.bg}>{sc.lbl}</Badge>
+                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
+                    {formatDate(s.created_at)}
+                  </p>
+                </Card>
               );
             })}
-            {filteredSalesLog.length === 0 && <div className="empty">No sales found</div>}
+            {filteredSalesLog.length === 0 && (
+              <p style={{ textAlign:'center', color:'#AAB7C4', marginTop:40 }}>No sales found</p>
+            )}
           </>
         )}
 
-        {tab === 'notpaid' && (
+        {/* ── Not Paid ── */}
+        {tab === 'Not Paid' && (
           <>
-            <SearchBar value={notPaidSearch} onChange={setNotPaidSearch} placeholder="Search invoice, salesman, company…" />
-            <div className="result-count">{filteredNotPaid.length} unpaid invoices</div>
+            <SearchInput value={notPaidSearch} onChange={setNotPaidSearch}
+              placeholder="Search invoice, salesman, company…" />
+            <p style={{ fontSize:11, color:'#5D6D7E', margin:'8px 0' }}>
+              {filteredNotPaid.length} unpaid invoices
+            </p>
             {filteredNotPaid.map(inv => {
               const isPending = inv.status === 'pending_approval';
-              const col = salesmanColor(inv.user_id, inv.salesman_name);
+              const col = salesmanColor(inv.user_id, inv.salesman_name, salesmen);
               return (
-                <div key={`${inv._source}-${inv.id}`} className="card" style={{ borderLeftColor: isPending ? '#F39C12' : '#C0392B' }}>
-                  <div className="card-top-row">
-                    <div className="card-title">
-                      {inv.invoice_number}
-                      <span className="tag-badge" style={{ background: inv._source === 'sales' ? '#EAF0FB' : '#F4ECFB', color: inv._source === 'sales' ? '#1A5276' : '#5B2C6F', marginLeft: 8 }}>
-                        {inv._source === 'sales' ? 'Sale' : 'Delivery'}
-                      </span>
+                <Card key={`${inv._source}-${inv.id}`} leftColor={isPending ? '#F39C12' : '#C0392B'}>
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                      <strong style={{ fontSize:14, color:'#1A252F' }}>{inv.invoice_number}</strong>
+                      <Badge
+                        color={inv._source==='sales' ? '#1A5276' : '#5B2C6F'}
+                        bg={inv._source==='sales' ? '#EAF0FB' : '#F4ECFB'}>
+                        {inv._source==='sales' ? 'Sale' : 'Delivery'}
+                      </Badge>
                     </div>
-                    <span className="tag-badge" style={{ background: col + '22', color: col }}>
+                    <span style={{ padding:'3px 8px', borderRadius:20,
+                      background:col+'22', color:col, fontSize:10, fontWeight:800 }}>
                       {inv.users?.name?.split(' ')[0] || inv.salesman_name?.split(' ')[0] || 'Deleted'}
                     </span>
                   </div>
-                  <div className="card-detail">Delivered to: {inv._to}</div>
-                  {inv.amount ? <div className="card-detail">Amount: {Number(inv.amount).toFixed(2)} OMR</div> : null}
-                  {isPending && <div className="card-detail">Method claimed: {pmLabel(inv.payment_method)}</div>}
-                  <span className="status-badge" style={{ background: isPending ? '#FDEBD0' : '#FADBD8', color: isPending ? '#784212' : '#A93226' }}>
-                    {isPending ? '⏳ Pending approval' : '✗ Not Paid'}
-                  </span>
-                  {isPending && <button className="approve-btn" onClick={() => handleApprove(inv)}>✓ Approve Payment</button>}
-                  <div className="card-time">{formatDate(inv.created_at)}</div>
-                </div>
+                  {inv.company_name && (
+                    <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 2px' }}>
+                      Company: {inv.company_name}
+                    </p>
+                  )}
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    Delivered to: {inv._to}
+                  </p>
+                  {inv.amount > 0 && (
+                    <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                      Amount: {Number(inv.amount).toFixed(2)} OMR
+                    </p>
+                  )}
+                  {isPending && (
+                    <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                      Method claimed: {pmLabel(inv.payment_method)}
+                    </p>
+                  )}
+                  <div style={{ marginTop:8 }}>
+                    <Badge
+                      color={isPending ? '#784212' : '#922B21'}
+                      bg={isPending ? '#FDEBD0' : '#FADBD8'}>
+                      {isPending ? '⏳ Pending approval' : '✗ Not Paid'}
+                    </Badge>
+                  </div>
+                  <div style={{ display:'flex', gap:8, marginTop:10 }}>
+                    {isPending && (
+                      <button onClick={() => handleApprove(inv)}
+                        style={{ flex:1, padding:'9px 0', background:'#27AE60', color:'#fff',
+                          border:'none', borderRadius:10, fontWeight:800, fontSize:13, cursor:'pointer' }}>
+                        ✓ Approve
+                      </button>
+                    )}
+                    {inv._source === 'delivery' && (
+                      <button
+                        onClick={() => {
+                          setAdminPayInv(inv);
+                          setAdminPayType('cash');
+                          setAdminCashType('cash');
+                          setAdminPayOpen(true);
+                        }}
+                        style={{ flex:1, padding:'9px 0', background:'#2C3E50', color:'#fff',
+                          border:'none', borderRadius:10, fontWeight:800, fontSize:13, cursor:'pointer' }}>
+                        💳 Mark Paid
+                      </button>
+                    )}
+                  </div>
+                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
+                    {formatDate(inv.created_at)}
+                  </p>
+                </Card>
               );
             })}
-            {filteredNotPaid.length === 0 && <div className="empty">No unpaid invoices 🎉</div>}
+            {filteredNotPaid.length === 0 && (
+              <p style={{ textAlign:'center', color:'#AAB7C4', marginTop:40 }}>
+                No unpaid invoices 🎉
+              </p>
+            )}
           </>
         )}
 
-        {tab === 'paid' && (
+        {/* ── Paid ── */}
+        {tab === 'Paid' && (
           <>
             <FilterBar selected={paidFilter} onSelect={setPaidFilter}
-              filters={[{ key: 'week', label: 'This Week' }, { key: 'month', label: 'This Month' }, { key: 'older', label: 'Older' }]} />
-            <SearchBar value={paidSearch} onChange={setPaidSearch} placeholder="Search invoice, salesman, method…" />
-            <div className="result-count">{filteredPaid.length} paid invoices</div>
+              filters={[
+                { key:'week', label:'This Week' },
+                { key:'month', label:'This Month' },
+                { key:'older', label:'Older' },
+              ]} />
+            <SearchInput value={paidSearch} onChange={setPaidSearch}
+              placeholder="Search invoice, salesman, method…" />
+            <p style={{ fontSize:11, color:'#5D6D7E', margin:'8px 0' }}>
+              {filteredPaid.length} paid invoices
+            </p>
             {filteredPaid.map(inv => {
-              const col = salesmanColor(inv.user_id, inv.salesman_name);
+              const col = salesmanColor(inv.user_id, inv.salesman_name, salesmen);
               return (
-                <div key={inv.id} className="card" style={{ borderLeftColor: '#27AE60' }}>
-                  <div className="card-top-row">
-                    <div className="card-title">{inv.invoice_number}</div>
-                    <span className="tag-badge" style={{ background: col + '22', color: col }}>
+                <Card key={inv.id} leftColor="#27AE60">
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
+                    <strong style={{ fontSize:14, color:'#1A252F' }}>{inv.invoice_number}</strong>
+                    <span style={{ padding:'3px 8px', borderRadius:20,
+                      background:col+'22', color:col, fontSize:10, fontWeight:800 }}>
                       {inv.users?.name?.split(' ')[0] || inv.salesman_name?.split(' ')[0] || 'Deleted'}
                     </span>
                   </div>
-                  <div className="card-detail">Delivered to: {inv.delivered_person}</div>
-                  <div className="card-detail">Payment: {pmLabel(inv.payment_method)}</div>
-                  {inv.approved_at && <div className="card-detail">Approved: {formatDate(inv.approved_at)}</div>}
-                  <span className="status-badge" style={{ background: '#D5F5E3', color: '#145A32' }}>✓ Paid & Approved</span>
-                  <div className="card-time">{formatDate(inv.created_at)}</div>
-                </div>
+                  {inv.company_name && (
+                    <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 2px' }}>
+                      Company: {inv.company_name}
+                    </p>
+                  )}
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    Delivered to: {inv.delivered_person}
+                  </p>
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    Payment: {pmLabel(inv.payment_method)}
+                  </p>
+                  {inv.approved_at && (
+                    <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                      Approved: {formatDate(inv.approved_at)}
+                    </p>
+                  )}
+                  <Badge color="#145A32" bg="#D5F5E3">✓ Paid & Approved</Badge>
+                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
+                    {formatDate(inv.created_at)}
+                  </p>
+                </Card>
               );
             })}
-            {filteredPaid.length === 0 && <div className="empty">No paid invoices found</div>}
+            {filteredPaid.length === 0 && (
+              <p style={{ textAlign:'center', color:'#AAB7C4', marginTop:40 }}>
+                No paid invoices found
+              </p>
+            )}
           </>
         )}
       </div>
 
-      {notifModal && (
-        <div className="overlay" onClick={() => setNotifModal(false)}>
-          <div className="sheet" style={{ maxHeight: '82vh' }} onClick={e => e.stopPropagation()}>
-            <div className="sheet-handle" />
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <div className="sheet-title" style={{ marginBottom: 0 }}>Notifications</div>
-              <button className="close-x" onClick={() => setNotifModal(false)}>✕</button>
-            </div>
-            {notifications.length === 0 && <div className="empty">No notifications</div>}
-            {notifications.slice(0, 15).map(n => (
-              <div key={n.id} className={`notif-item ${!n.is_read ? 'notif-unread' : ''}`}
-                style={{ borderLeftColor: n.type === 'tracking_on' ? '#27AE60' : n.type === 'tracking_off' ? '#EA4335' : '#F39C12' }}>
-                <div className="notif-msg">{n.message}</div>
-                <div className="notif-time">{formatDate(n.created_at)} · {timeAgo(n.created_at)}</div>
-              </div>
-            ))}
+      {/* ── Notifications Modal ── */}
+      <ModalSheet open={notifOpen} onClose={() => setNotifOpen(false)} title="Notifications">
+        {notifications.length === 0 && (
+          <p style={{ color:'#AAB7C4', textAlign:'center' }}>No notifications</p>
+        )}
+        {notifications.slice(0, 15).map(n => (
+          <div key={n.id} style={{ padding:12, borderRadius:12, marginBottom:8,
+            background: n.is_read ? '#F9F9F9' : '#FFF5F5',
+            borderLeft:`3px solid ${
+              n.type==='tracking_on' ? '#27AE60'
+              : n.type==='tracking_off' ? '#EA4335'
+              : n.type==='edit_request' ? '#2C3E50'
+              : '#F39C12'
+            }` }}>
+            <p style={{ margin:0, fontSize:13, fontWeight:700, color:'#1A252F' }}>{n.message}</p>
+            <p style={{ margin:'4px 0 0', fontSize:10, color:'#AAB7C4' }}>
+              {formatDateFull(n.created_at)}  ·  {timeAgo(n.created_at)}
+            </p>
           </div>
-        </div>
-      )}
-
-      {addModal && (
-        <div className="overlay" onClick={() => setAddModal(false)}>
-          <div className="sheet" onClick={e => e.stopPropagation()}>
-            <div className="sheet-handle" />
-            <div className="sheet-title">Add Salesman</div>
-            <form onSubmit={handleAddSalesman}>
-              <label className="field-label">Full Name *</label>
-              <input className="field-input" value={newName} onChange={e => setNewName(e.target.value)} placeholder="Full name" />
-              <label className="field-label">Email *</label>
-              <input className="field-input" type="email" autoCapitalize="none" value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="email@alsahal.com" />
-              <label className="field-label">Password *</label>
-              <input className="field-input" type="password" value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="••••••••" />
-              <label className="field-label">Sales Target — this month (OMR)</label>
-              <input className="field-input" type="number" value={newTarget} onChange={e => setNewTarget(e.target.value)} placeholder="Optional, can be set later" />
-              <div className="info-box">Only admin can create salesman accounts. Salesmen cannot sign up themselves.</div>
-              <button className="btn-primary" style={{ marginTop: 14 }} type="submit" disabled={addLoading}>
-                {addLoading ? 'Creating…' : 'Create Account'}
-              </button>
-            </form>
-            <button style={{ width: '100%', textAlign: 'center', marginTop: 12, background: 'none', color: '#5D6D7E', fontSize: 14, fontWeight: 600 }}
-              onClick={() => setAddModal(false)}>Cancel</button>
-          </div>
-        </div>
-      )}
-
-      {detailModal && selectedSalesman && (
-        <SalesmanDetail
-          salesman={selectedSalesman}
-          color={COLORS[salesmen.findIndex(s => s.id === selectedSalesman.id) % COLORS.length] || '#8E44AD'}
-          tracking={getTracking(selectedSalesman.id)}
-          location={getLocation(selectedSalesman.id)}
-          credentials={credentials}
-          credLoading={credLoading}
-          onViewCredentials={() => handleViewCredentials(selectedSalesman)}
-          onDelete={() => handleDeleteSalesman(selectedSalesman)}
-          onClose={() => { setDetailModal(false); setCredentials(null); }}
-          onMap={openMap}
-        />
-      )}
-    </div>
-  );
-}
-
-function SalesmanDetail({ salesman, color, tracking, location, credentials, credLoading, onViewCredentials, onDelete, onClose, onMap }) {
-  const [detailFilter, setDetailFilter] = useState('today');
-  const [visits, setVisits] = useState([]);
-  const [deliveries, setDeliveries] = useState([]);
-  const [summary, setSummary] = useState(null);
-  const [target, setTarget] = useState({ target_amount: 0, achieved_amount: 0 });
-  const [targetInput, setTargetInput] = useState('');
-  const [targetSaving, setTargetSaving] = useState(false);
-  const DETAIL_FILTERS = [
-    { key: 'today', label: 'Today' }, { key: 'yesterday', label: 'Yesterday' },
-    { key: 'week', label: 'This Week' }, { key: 'month', label: 'This Month' }, { key: 'all', label: 'All Time' },
-  ];
-
-  useEffect(() => {
-    Promise.all([
-      getVisits(detailFilter === 'all' ? undefined : detailFilter, salesman.id),
-      getDeliveries(detailFilter === 'all' ? undefined : detailFilter, salesman.id),
-    ]).then(([v, d]) => { setVisits(v || []); setDeliveries(d || []); }).catch(() => {});
-  }, [detailFilter, salesman.id]);
-
-  useEffect(() => {
-    getSalesmanSummary(salesman.id).then(setSummary).catch(() => {});
-    getSalesTarget(salesman.id).then(t => { setTarget(t); setTargetInput(String(t.target_amount || '')); }).catch(() => {});
-  }, [salesman.id]);
-
-  const handleSaveTarget = async () => {
-    const amount = Number(targetInput);
-    if (isNaN(amount) || amount < 0) return alert('Enter a valid target amount');
-    setTargetSaving(true);
-    try {
-      const month = new Date().toISOString().slice(0, 7) + '-01';
-      await setSalesTarget(salesman.id, month, amount);
-      const t = await getSalesTarget(salesman.id);
-      setTarget(t); setTargetInput(String(t.target_amount || ''));
-      alert('Sales target updated');
-    } catch { alert('Failed to save target'); }
-    finally { setTargetSaving(false); }
-  };
-
-  const isOn = tracking?.is_tracking;
-  const uniqueCompanies = [...new Set(visits.map(v => v.company_name))].length;
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet sheet-flex" style={{ maxHeight: '92vh' }} onClick={e => e.stopPropagation()}>
-        <div className="sheet-handle" />
-        <div className="detail-header">
-          <div className="av" style={{ background: color, width: 48, height: 48, borderRadius: 24, fontSize: 18 }}>{initials(salesman.name)}</div>
-          <div style={{ flex: 1 }}>
-            <div className="detail-name">{salesman.name}</div>
-            <div style={{ fontSize: 11, color: '#5D6D7E' }}>{salesman.email}</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3 }}>
-              <div className="track-dot" style={{ background: isOn ? '#27AE60' : '#EA4335' }} />
-              <span style={{ fontSize: 11, fontWeight: 700, color: isOn ? '#27AE60' : '#EA4335' }}>{isOn ? 'Active' : 'Inactive'}</span>
-            </div>
-          </div>
-          <button className="close-x" onClick={onClose}>✕</button>
-        </div>
-
-        {/* Everything below scrolls in its own region; the delete button
-            sits outside it as a fixed footer so it never moves regardless
-            of how much activity history exists. */}
-        <div className="detail-scroll">
-          <button className="cred-btn" onClick={onViewCredentials}>
-            {credLoading ? 'Loading…' : credentials ? `📧 ${credentials.email}   🔑 ${credentials.password_plain || '(not stored)'}` : '👁 View Login Credentials'}
-          </button>
-
-          <div className="target-box">
-            <div className="section-label-sm">SALES TARGET · THIS MONTH</div>
-            <div className="target-numbers">
-              <span className="target-achieved">{Number(target.achieved_amount || 0).toFixed(0)}</span>
-              <span className="target-slash">/ {Number(target.target_amount || 0).toFixed(0)} OMR</span>
-            </div>
-            <div className="target-bar-bg">
-              <div className="target-bar-fill" style={{
-                width: `${target.target_amount > 0 ? Math.min(100, (target.achieved_amount / target.target_amount) * 100) : 0}%`
-              }} />
-            </div>
-            <div className="target-edit-row">
-              <input className="field-input" style={{ marginBottom: 0, height: 40 }} type="number"
-                value={targetInput} onChange={e => setTargetInput(e.target.value)} placeholder="Set new target (OMR)" />
-              <button className="target-save-btn" onClick={handleSaveTarget} disabled={targetSaving}>
-                {targetSaving ? '…' : 'Save'}
-              </button>
-            </div>
-          </div>
-
-          {summary && (
-            <div className="summary-row">
-              <div className="summary-txt">Today: {summary.visits_today} visits · {summary.deliveries_today} deliveries</div>
-              <div className="summary-txt">All-time: {summary.visits_total} visits · {summary.deliveries_total} deliveries</div>
-            </div>
-          )}
-
-          <div className="stats-row" style={{ background: 'transparent', border: 'none', padding: '0 0 8px' }}>
-            <div className="stat-card"><div className="stat-val" style={{ color: '#2C3E50', fontSize: 20 }}>{visits.length}</div><div className="stat-lbl">Visits</div></div>
-            <div className="stat-card"><div className="stat-val" style={{ color: '#27AE60', fontSize: 20 }}>{uniqueCompanies}</div><div className="stat-lbl">Companies</div></div>
-            <div className="stat-card"><div className="stat-val" style={{ color: '#C0392B', fontSize: 20 }}>{deliveries.length}</div><div className="stat-lbl">Deliveries</div></div>
-          </div>
-
-          {isOn && (
-            <button className="live-loc-btn" onClick={() => location ? onMap(location.lat, location.lng, salesman.name) : alert('No location data yet')}>
-              📍 Live Location {location ? `· ${timeAgo(location.recorded_at)}` : '· No data yet'}
-            </button>
-          )}
-
-          <div className="filter-row">
-            {DETAIL_FILTERS.map(f => (
-              <button key={f.key} className={`filter-pill ${detailFilter === f.key ? 'on' : ''}`} onClick={() => setDetailFilter(f.key)}>{f.label}</button>
-            ))}
-          </div>
-
-          {visits.length === 0 && deliveries.length === 0 && <div className="empty">No activity found</div>}
-
-          {visits.map(v => (
-            <div key={v.id} className="card" style={{ borderLeftColor: color }}>
-              <div className="card-top-row">
-                <div className="card-title">{v.company_name}</div>
-                <span className="tag-badge" style={{ background: '#EAF0FB', color: '#1A5276' }}>Visit</span>
-              </div>
-              <div className="card-detail">{v.contact_name} · {v.mobile}</div>
-              {v.email_id && <div className="card-detail">{v.email_id}</div>}
-              {v.quotation && <div className="card-detail">Quotation: {v.quotation_description}</div>}
-              {v.lat && v.lng && <div><span className="map-btn" onClick={() => onMap(v.lat, v.lng, v.company_name)}>📍 View visit location</span></div>}
-              <div className="card-time">{formatDate(v.visited_at)}</div>
-            </div>
-          ))}
-          {deliveries.map(d => (
-            <div key={d.id} className="card" style={{ borderLeftColor: color }}>
-              <div className="card-top-row">
-                <div className="card-title">{d.invoice_number}</div>
-                <span className="tag-badge" style={{ background: '#D5F5E3', color: '#145A32' }}>Delivery</span>
-              </div>
-              <div className="card-detail">To: {d.delivered_person} · {pmLabel(d.payment_method)}</div>
-              {d.lat && d.lng && <div><span className="map-btn" onClick={() => onMap(d.lat, d.lng, d.invoice_number)}>📍 View delivery location</span></div>}
-              <div className="card-time">{formatDate(d.created_at)}</div>
-            </div>
-          ))}
-        </div>
-
-        <button className="btn-primary" style={{ background: '#EA4335', marginTop: 10, flexShrink: 0 }} onClick={onDelete}>
-          Delete Salesman Account
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════
-//  SALESMAN WEB VIEW — mirrors the mobile SalesmanDashboard's tabs
-// ══════════════════════════════════════════════════════════════════
-const SALES_TABS = [
-  { key: 'home', label: 'Home', icon: '🏠' },
-  { key: 'visits', label: 'Visits', icon: '📍' },
-  { key: 'delivery', label: 'Delivery', icon: '🚚' },
-  { key: 'saleslog', label: 'Sales Log', icon: '💰' },
-  { key: 'notpaid', label: 'Not Paid', icon: '🧾' },
-];
-
-const PAY_OPTIONS = [
-  { key: 'cash', label: 'Cash' },
-  { key: 'bank', label: 'Bank Transfer' },
-  { key: 'credit', label: 'Credit' },
-  { key: 'not_paid', label: 'Not Paid' },
-];
-
-function getBrowserLocation() {
-  return new Promise((resolve) => {
-    if (!navigator.geolocation) return resolve(null);
-    navigator.geolocation.getCurrentPosition(
-      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-      () => resolve(null),
-      { enableHighAccuracy: true, timeout: 8000 }
-    );
-  });
-}
-
-function SalesmanView({ onLogout }) {
-  const [name, setName] = useState('');
-  const [activeTab, setActiveTab] = useState('home');
-  const [tracking, setTracking] = useState(false);
-  const [trackingBusy, setTrackingBusy] = useState(false);
-
-  const [visits, setVisits] = useState([]);
-  const [deliveries, setDeliveries] = useState([]);
-  const [salesLog, setSalesLog] = useState([]);
-  const [notPaid, setNotPaid] = useState([]);
-  const [notPaidSales, setNotPaidSales] = useState([]);
-  const [target, setTarget] = useState({ target_amount: 0, achieved_amount: 0 });
-
-  const [visitFilter, setVisitFilter] = useState('today');
-  const [deliveryFilter, setDeliveryFilter] = useState('today');
-  const [salesLogFilter, setSalesLogFilter] = useState('today');
-
-  const [visitModal, setVisitModal] = useState(false);
-  const [deliveryModal, setDeliveryModal] = useState(false);
-  const [saleModal, setSaleModal] = useState(false);
-  const [payModal, setPayModal] = useState(false);
-  const [selectedInv, setSelectedInv] = useState(null);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    const token = getToken();
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      setName(payload.name || '');
-    } catch {}
-    loadNotPaid();
-    loadTarget();
-  }, []);
-
-  useEffect(() => { getVisits(visitFilter).then(setVisits).catch(() => {}); }, [visitFilter]);
-  useEffect(() => { getDeliveries(deliveryFilter).then(setDeliveries).catch(() => {}); }, [deliveryFilter]);
-  useEffect(() => { getSalesLog(salesLogFilter).then(setSalesLog).catch(() => {}); }, [salesLogFilter]);
-
-  // Ping location every 60s while tracking is on (browser tab must stay open)
-  useEffect(() => {
-    if (!tracking) return;
-    const iv = setInterval(async () => {
-      const loc = await getBrowserLocation();
-      if (loc) pingLocation(loc.lat, loc.lng).catch(() => {});
-    }, 60000);
-    return () => clearInterval(iv);
-  }, [tracking]);
-
-  const loadNotPaid = () => {
-    getNotPaidInvoices().then(setNotPaid).catch(() => {});
-    getNotPaidSales().then(setNotPaidSales).catch(() => {});
-  };
-  const loadTarget = () => getSalesTarget().then(setTarget).catch(() => {});
-
-  const toggleTracking = async () => {
-    setTrackingBusy(true);
-    try {
-      const next = !tracking;
-      await setTrackingStatus(next);
-      setTracking(next);
-      if (next) {
-        const loc = await getBrowserLocation();
-        if (loc) pingLocation(loc.lat, loc.lng).catch(() => {});
-      }
-    } catch { alert('Failed to update tracking status'); }
-    finally { setTrackingBusy(false); }
-  };
-
-  const mergedNotPaid = [
-    ...notPaid.map(i => ({ ...i, _source: 'delivery', _to: i.delivered_person })),
-    ...notPaidSales.map(i => ({ ...i, _source: 'sales', _to: i.delivered_to })),
-  ].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-  const handleRequestPayment = async (pm) => {
-    try {
-      if (selectedInv._source === 'sales') await requestSalePayment(selectedInv.id, pm);
-      else await requestPayment(selectedInv.id, pm);
-      setPayModal(false);
-      loadNotPaid();
-    } catch { alert('Failed to submit payment request'); }
-  };
-
-  return (
-    <div className="app-container">
-      <div className="header">
-        <div>
-          <h1>Al Sahal</h1>
-          <div className="sub">{name || 'Salesman'} · Sales Tracker</div>
-        </div>
-        <div className="header-actions">
-          <button className="logout-btn" onClick={() => { if (confirm('Sign out?')) onLogout(); }}>Sign Out</button>
-        </div>
-      </div>
-
-      <div className="track-toggle-row">
-        <button className={`track-toggle-btn ${tracking ? 'on' : ''}`} onClick={toggleTracking} disabled={trackingBusy}>
-          {trackingBusy ? '…' : tracking ? '● Work Started — Tap to Stop' : '○ Tap to Start Work'}
-        </button>
-      </div>
-
-      <div className="tabs">
-        {SALES_TABS.map(t => (
-          <button key={t.key} className={`tab ${activeTab === t.key ? 'on' : ''}`} onClick={() => setActiveTab(t.key)}>
-            {t.icon} {t.label}
-          </button>
         ))}
-      </div>
-
-      <div className="content">
-        {activeTab === 'home' && (
-          <div style={{ padding: 16 }}>
-            <div className="target-box">
-              <div className="section-label-sm">SALES TARGET · THIS MONTH</div>
-              <div className="target-numbers">
-                <span className="target-achieved">{Number(target.achieved_amount || 0).toFixed(0)}</span>
-                <span className="target-slash">/ {Number(target.target_amount || 0).toFixed(0)} OMR</span>
-              </div>
-              <div className="target-bar-bg">
-                <div className="target-bar-fill" style={{
-                  width: `${target.target_amount > 0 ? Math.min(100, (target.achieved_amount / target.target_amount) * 100) : 0}%`
-                }} />
-              </div>
-            </div>
-            <div className="stats-row">
-              <div className="stat-card"><div className="stat-val" style={{ color: '#2C3E50' }}>{visits.length}</div><div className="stat-lbl">Visits</div></div>
-              <div className="stat-card"><div className="stat-val" style={{ color: '#EA4335' }}>{mergedNotPaid.filter(i => i.status === 'not_paid').length}</div><div className="stat-lbl">Not Paid</div></div>
-              <div className="stat-card"><div className="stat-val" style={{ color: '#27AE60' }}>{deliveries.length}</div><div className="stat-lbl">Deliveries</div></div>
-            </div>
-          </div>
+        {notifications.length > 15 && (
+          <p style={{ textAlign:'center', color:'#5D6D7E', fontSize:12, fontWeight:600 }}>
+            + {notifications.length - 15} older notifications
+          </p>
         )}
+      </ModalSheet>
 
-        {activeTab === 'visits' && (
-          <>
-            <FilterBar selected={visitFilter} onSelect={setVisitFilter} />
-            <div className="result-count">{visits.length} visits</div>
-            {visits.map(v => (
-              <div key={v.id} className="card" style={{ borderLeftColor: '#8E44AD' }}>
-                <div className="card-title">{v.company_name}</div>
-                <div className="card-detail">{v.contact_name} · {v.mobile}</div>
-                {v.email_id && <div className="card-detail">{v.email_id}</div>}
-                {v.quotation && <div className="card-detail">Quotation: {v.quotation_description}</div>}
-                <div className="card-time">{formatDate(v.visited_at)}</div>
+      {/* ── Add Salesman Modal ── */}
+      <ModalSheet open={addOpen} onClose={() => setAddOpen(false)} title="Add Salesman">
+        <FormField label="Full Name" required>
+          <Input value={newName} onChange={setNewName} placeholder="Full name" />
+        </FormField>
+        <FormField label="Email" required>
+          <Input value={newEmail} onChange={setNewEmail} placeholder="email@alsahal.com" type="email" />
+        </FormField>
+        <FormField label="Password" required>
+          <Input value={newPassword} onChange={setNewPassword} placeholder="••••••••" type="password" />
+        </FormField>
+        <FormField label="Sales Target — this month (OMR)">
+          <Input value={newTarget} onChange={setNewTarget} placeholder="Optional" type="number" />
+        </FormField>
+        <InfoBox>Only admin can create salesman accounts.</InfoBox>
+        <Btn onClick={handleAddSalesman} disabled={addLoading}>
+          {addLoading ? 'Creating…' : 'Create Account'}
+        </Btn>
+      </ModalSheet>
+
+      {/* ── Salesman Detail Modal ── */}
+      <ModalSheet open={detailOpen} onClose={() => { setDetailOpen(false); setCredentials(null); }}
+        title={selectedSalesman?.name || ''}>
+        {selectedSalesman && (() => {
+          const col = COLORS[salesmen.findIndex(s => s.id === selectedSalesman.id) % COLORS.length] || '#8E44AD';
+          const tr = getTracking(selectedSalesman.id);
+          const loc = getLocation(selectedSalesman.id);
+          const isOn = tr?.is_tracking;
+          const uniqueCompanies = [...new Set(salesmanVisits.map(v => v.company_name))].length;
+          return (
+            <>
+              <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:12 }}>
+                <div style={{ width:48, height:48, borderRadius:'50%', background:col,
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  color:'#fff', fontWeight:800, fontSize:18 }}>
+                  {initials(selectedSalesman.name)}
+                </div>
+                <div>
+                  <p style={{ margin:0, fontSize:16, fontWeight:800, color:'#1A252F' }}>
+                    {selectedSalesman.name}
+                  </p>
+                  <p style={{ margin:'2px 0 0', fontSize:11, color:'#5D6D7E' }}>
+                    {selectedSalesman.email}
+                  </p>
+                  <div style={{ display:'flex', alignItems:'center', gap:5, marginTop:3 }}>
+                    <div style={{ width:8, height:8, borderRadius:'50%',
+                      background: isOn ? '#27AE60' : '#EA4335' }} />
+                    <span style={{ fontSize:11, fontWeight:700,
+                      color: isOn ? '#27AE60' : '#EA4335' }}>
+                      {isOn ? 'Active' : 'Inactive'}
+                    </span>
+                  </div>
+                </div>
               </div>
-            ))}
-            {visits.length === 0 && <div className="empty">No visits found</div>}
-            <button className="web-fab" onClick={() => setVisitModal(true)}>+</button>
-          </>
-        )}
 
-        {activeTab === 'delivery' && (
-          <>
-            <FilterBar selected={deliveryFilter} onSelect={setDeliveryFilter} />
-            <div className="result-count">{deliveries.length} deliveries</div>
-            {deliveries.map(d => (
-              <div key={d.id} className="card" style={{ borderLeftColor: '#27AE60' }}>
-                <div className="card-title">{d.invoice_number}</div>
-                <div className="card-detail">To: {d.delivered_person} · {pmLabel(d.payment_method)}</div>
-                {d.amount ? <div className="card-detail">Amount: {Number(d.amount).toFixed(2)} OMR</div> : null}
-                <div className="card-time">{formatDate(d.created_at)}</div>
-              </div>
-            ))}
-            {deliveries.length === 0 && <div className="empty">No deliveries found</div>}
-            <button className="web-fab" onClick={() => setDeliveryModal(true)}>+</button>
-          </>
-        )}
+              <button onClick={() => handleViewCredentials(selectedSalesman)}
+                style={{ width:'100%', padding:10, background:'#EAF0FB',
+                  border:'1px solid #D0E4F7', borderRadius:10, fontSize:12,
+                  fontWeight:700, color:'#2C3E50', cursor:'pointer', marginBottom:12 }}>
+                {credLoading ? 'Loading…'
+                  : credentials
+                  ? `📧 ${credentials.email}   🔑 ${credentials.password_plain || '(not stored)'}`
+                  : '👁 View Login Credentials'}
+              </button>
 
-        {activeTab === 'saleslog' && (
-          <>
-            <FilterBar selected={salesLogFilter} onSelect={setSalesLogFilter} />
-            <div className="result-count">{salesLog.length} sales</div>
-            {salesLog.map(s => (
-              <div key={s.id} className="card" style={{ borderLeftColor: '#1A5276' }}>
-                <div className="card-title">{s.invoice_number}</div>
-                <div className="card-detail">Delivered to: {s.delivered_to}</div>
-                <div className="card-detail">Amount: {Number(s.amount || 0).toFixed(2)} OMR · {pmLabel(s.payment_method)}</div>
-                <div className="card-time">{formatDate(s.created_at)}</div>
-              </div>
-            ))}
-            {salesLog.length === 0 && <div className="empty">No sales logged</div>}
-            <button className="web-fab" onClick={() => setSaleModal(true)}>+</button>
-          </>
-        )}
-
-        {activeTab === 'notpaid' && (
-          <>
-            <div className="result-count">{mergedNotPaid.length} unpaid invoices</div>
-            {mergedNotPaid.map(inv => {
-              const isPending = inv.status === 'pending_approval';
-              return (
-                <div key={`${inv._source}-${inv.id}`} className="card" style={{ borderLeftColor: isPending ? '#F39C12' : '#C0392B' }}>
-                  <div className="card-title">{inv.invoice_number}</div>
-                  <div className="card-detail">Delivered to: {inv._to}</div>
-                  <span className="status-badge" style={{ background: isPending ? '#FDEBD0' : '#FADBD8', color: isPending ? '#784212' : '#A93226' }}>
-                    {isPending ? '⏳ Waiting for admin approval' : '✗ Not Paid'}
+              {/* Target */}
+              <div style={{ background:'#F4F5F7', borderRadius:12, padding:14,
+                marginBottom:12, border:'1px solid #EBEBEB' }}>
+                <p style={{ margin:'0 0 4px', fontSize:10, fontWeight:700,
+                  color:'#5D6D7E', letterSpacing:0.8 }}>
+                  SALES TARGET · THIS MONTH
+                </p>
+                <div style={{ display:'flex', alignItems:'flex-end', gap:6, marginTop:2 }}>
+                  <span style={{ fontSize:22, fontWeight:800, color:'#2C3E50' }}>
+                    {Number(salesmanTarget.achieved_amount||0).toFixed(0)}
                   </span>
-                  {!isPending && (
-                    <button className="approve-btn" style={{ background: '#EAF0FB', color: '#1A5276' }}
-                      onClick={() => { setSelectedInv(inv); setPayModal(true); }}>
-                      Mark as Paid
+                  <span style={{ fontSize:13, fontWeight:600, color:'#5D6D7E', marginBottom:2 }}>
+                    / {Number(salesmanTarget.target_amount||0).toFixed(0)} OMR
+                  </span>
+                </div>
+                <div style={{ height:8, background:'#E8EAED', borderRadius:4,
+                  marginTop:10, overflow:'hidden' }}>
+                  <div style={{ height:8, background:'#27AE60', borderRadius:4,
+                    width:`${salesmanTarget.target_amount > 0
+                      ? Math.min(100,(salesmanTarget.achieved_amount/salesmanTarget.target_amount)*100)
+                      : 0}%` }} />
+                </div>
+                <div style={{ display:'flex', gap:8, marginTop:10 }}>
+                  <input value={targetInput} onChange={e => setTargetInput(e.target.value)}
+                    placeholder="Set target (OMR)" type="number"
+                    style={{ flex:1, padding:'8px 12px', borderRadius:10,
+                      border:'1px solid #E8EAED', fontSize:13, outline:'none',
+                      background:'#fff', color:'#1A252F' }} />
+                  <button onClick={handleSaveTarget} disabled={targetSaving}
+                    style={{ padding:'8px 18px', background:'#C0392B', color:'#fff',
+                      border:'none', borderRadius:10, fontWeight:700, cursor:'pointer' }}>
+                    {targetSaving ? '…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+
+              {salesmanSummary && (
+                <div style={{ marginBottom:12 }}>
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    Today: {salesmanSummary.visits_today} visits · {salesmanSummary.deliveries_today} deliveries
+                  </p>
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    All-time: {salesmanSummary.visits_total} visits · {salesmanSummary.deliveries_total} deliveries
+                  </p>
+                </div>
+              )}
+
+              {/* Stats */}
+              <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+                {[
+                  { label:'Visits', val: salesmanVisits.length, color:'#2C3E50' },
+                  { label:'Companies', val: uniqueCompanies, color:'#27AE60' },
+                  { label:'Deliveries', val: salesmanDeliveries.length, color:'#C0392B' },
+                ].map(s => (
+                  <div key={s.label} style={{ flex:1, background:'#F4F5F7',
+                    borderRadius:12, padding:12, textAlign:'center' }}>
+                    <div style={{ fontSize:20, fontWeight:800, color:s.color }}>{s.val}</div>
+                    <div style={{ fontSize:10, fontWeight:700, color:'#5D6D7E',
+                      textTransform:'uppercase', letterSpacing:0.5 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              {isOn && (
+                <button
+                  onClick={() => loc
+                    ? openMap(loc.lat, loc.lng, selectedSalesman.name)
+                    : alert('No location data yet')}
+                  style={{ width:'100%', padding:10, background:'#D5F5E3',
+                    border:'1px solid #A9DFBF', borderRadius:10, fontSize:12,
+                    fontWeight:700, color:'#145A32', cursor:'pointer', marginBottom:10 }}>
+                  📍 Live Location {loc ? `· ${timeAgo(loc.recorded_at)}` : '· No data yet'}
+                </button>
+              )}
+
+              <FilterBar selected={detailFilter} onSelect={setDetailFilter}
+                filters={[
+                  { key:'today', label:'Today' },
+                  { key:'yesterday', label:'Yesterday' },
+                  { key:'week', label:'This Week' },
+                  { key:'month', label:'This Month' },
+                  { key:'all', label:'All Time' },
+                ]} />
+
+              {salesmanVisits.length === 0 && salesmanDeliveries.length === 0 && (
+                <p style={{ textAlign:'center', color:'#AAB7C4', marginTop:20 }}>No activity found</p>
+              )}
+
+              {salesmanVisits.map(v => (
+                <Card key={v.id} leftColor={col}>
+                  <div style={{ display:'flex', justifyContent:'space-between' }}>
+                    <strong style={{ fontSize:13, color:'#1A252F' }}>{v.company_name}</strong>
+                    <Badge color="#1A5276" bg="#EAF0FB">Visit</Badge>
+                  </div>
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 2px' }}>
+                    {v.contact_name} · {v.mobile}
+                  </p>
+                  {v.email_id && (
+                    <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>{v.email_id}</p>
+                  )}
+                  {v.quotation && (
+                    <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                      Quotation: {v.quotation_description}
+                    </p>
+                  )}
+                  {v.lat && v.lng && (
+                    <button onClick={() => openMap(v.lat, v.lng, v.company_name)}
+                      style={{ marginTop:6, padding:'5px 10px', background:'#F4F5F7',
+                        border:'1px solid #DDD', borderRadius:8, fontSize:11,
+                        fontWeight:700, color:'#C0392B', cursor:'pointer' }}>
+                      📍 View visit location
                     </button>
                   )}
-                  <div className="card-time">{formatDate(inv.created_at)}</div>
-                </div>
-              );
-            })}
-            {mergedNotPaid.length === 0 && <div className="empty">No unpaid invoices 🎉</div>}
-          </>
-        )}
-      </div>
+                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
+                    {formatDate(v.visited_at)}
+                  </p>
+                </Card>
+              ))}
 
-      {/* Visit modal */}
-      {visitModal && (
-        <VisitFormModal
-          onClose={() => setVisitModal(false)}
-          onSaved={() => { setVisitModal(false); getVisits(visitFilter).then(setVisits); }}
-        />
-      )}
+              {salesmanDeliveries.map(d => (
+                <Card key={d.id} leftColor={col}>
+                  <div style={{ display:'flex', justifyContent:'space-between' }}>
+                    <strong style={{ fontSize:13, color:'#1A252F' }}>{d.invoice_number}</strong>
+                    <Badge color="#145A32" bg="#D5F5E3">Delivery</Badge>
+                  </div>
+                  {d.company_name && (
+                    <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 2px' }}>
+                      Company: {d.company_name}
+                    </p>
+                  )}
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
+                    To: {d.delivered_person} · {pmLabel(d.payment_method)}
+                  </p>
+                  {d.lat && d.lng && (
+                    <button onClick={() => openMap(d.lat, d.lng, d.invoice_number)}
+                      style={{ marginTop:6, padding:'5px 10px', background:'#F4F5F7',
+                        border:'1px solid #DDD', borderRadius:8, fontSize:11,
+                        fontWeight:700, color:'#C0392B', cursor:'pointer' }}>
+                      📍 View delivery location
+                    </button>
+                  )}
+                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
+                    {formatDate(d.created_at)}
+                  </p>
+                </Card>
+              ))}
 
-      {/* Delivery modal */}
-      {deliveryModal && (
-        <DeliveryFormModal
-          onClose={() => setDeliveryModal(false)}
-          onSaved={() => {
-            setDeliveryModal(false);
-            getDeliveries(deliveryFilter).then(setDeliveries);
-            loadNotPaid(); loadTarget();
-          }}
-        />
-      )}
+              <button onClick={() => handleDeleteSalesman(selectedSalesman)}
+                style={{ width:'100%', height:48, background:'#EA4335', color:'#fff',
+                  border:'none', borderRadius:14, fontWeight:800, fontSize:14,
+                  cursor:'pointer', marginTop:16 }}>
+                Delete Salesman Account
+              </button>
+            </>
+          );
+        })()}
+      </ModalSheet>
 
-      {/* Sale modal */}
-      {saleModal && (
-        <SaleFormModal
-          onClose={() => setSaleModal(false)}
-          onSaved={() => {
-            setSaleModal(false);
-            getSalesLog(salesLogFilter).then(setSalesLog);
-            loadNotPaid(); loadTarget();
-          }}
-        />
-      )}
+      {/* ── Admin Direct Mark Paid Modal ── */}
+      <ModalSheet open={adminPayOpen} onClose={() => setAdminPayOpen(false)} title="Mark as Paid">
+        <p style={{ fontSize:13, color:'#5D6D7E', textAlign:'center', marginTop:-8, marginBottom:16 }}>
+          {adminPayInv?.invoice_number} · Admin override
+        </p>
+        <FormField label="Payment Method" required>
+          <PayTypeSelector
+            type={adminPayType} setType={setAdminPayType}
+            cashT={adminCashType} setCashT={setAdminCashType} />
+        </FormField>
+        <InfoBox>
+          This will immediately move the invoice to Paid without salesman action.
+        </InfoBox>
+        <Btn onClick={handleAdminMarkPaid}>Confirm & Move to Paid</Btn>
+      </ModalSheet>
 
-      {/* Payment modal */}
-      {payModal && selectedInv && (
-        <div className="overlay" onClick={() => setPayModal(false)}>
-          <div className="sheet" style={{ maxWidth: 420 }} onClick={e => e.stopPropagation()}>
-            <div className="sheet-handle" />
-            <div className="sheet-title">Mark {selectedInv.invoice_number} as Paid</div>
-            <div className="field-label" style={{ marginBottom: 8 }}>How was it paid?</div>
-            {PAY_OPTIONS.filter(o => o.key !== 'not_paid').map(o => (
-              <button key={o.key} className="pay-option-btn" onClick={() => handleRequestPayment(o.key)}>{o.label}</button>
-            ))}
-            <button className="btn-ghost" style={{ marginTop: 10 }} onClick={() => setPayModal(false)}>Cancel</button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function VisitFormModal({ onClose, onSaved }) {
-  const [company, setCompany] = useState('');
-  const [contact, setContact] = useState('');
-  const [mobile, setMobile] = useState('');
-  const [emailId, setEmailId] = useState('');
-  const [quotation, setQuotation] = useState(false);
-  const [quotationDesc, setQuotationDesc] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const handleSave = async () => {
-    if (!company.trim()) return alert('Company name is required');
-    setSaving(true);
-    try {
-      const loc = await getBrowserLocation();
-      await logVisit({
-        company_name: company.trim(), contact_name: contact.trim(), mobile: mobile.trim(),
-        email_id: emailId.trim(), quotation, quotation_description: quotationDesc.trim(),
-        lat: loc?.lat, lng: loc?.lng,
-      });
-      onSaved();
-    } catch { alert('Failed to save visit'); }
-    finally { setSaving(false); }
-  };
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" style={{ maxWidth: 460 }} onClick={e => e.stopPropagation()}>
-        <div className="sheet-handle" />
-        <div className="sheet-title">New Visit</div>
-        <label className="field-label">Company Name *</label>
-        <input className="field-input" value={company} onChange={e => setCompany(e.target.value)} placeholder="Company name" />
-        <label className="field-label">Contact Person</label>
-        <input className="field-input" value={contact} onChange={e => setContact(e.target.value)} placeholder="Contact name" />
-        <label className="field-label">Mobile</label>
-        <input className="field-input" value={mobile} onChange={e => setMobile(e.target.value)} placeholder="Mobile number" />
-        <label className="field-label">Email</label>
-        <input className="field-input" value={emailId} onChange={e => setEmailId(e.target.value)} placeholder="Email address" />
-        <label className="check-row">
-          <input type="checkbox" checked={quotation} onChange={e => setQuotation(e.target.checked)} /> Quotation given
-        </label>
-        {quotation && (
-          <>
-            <label className="field-label">Quotation Details</label>
-            <textarea className="field-input" rows={3} value={quotationDesc} onChange={e => setQuotationDesc(e.target.value)} />
-          </>
-        )}
-        <div className="info-box">Your current browser location will be saved with this visit, if allowed.</div>
-        <button className="btn-primary" style={{ marginTop: 12 }} onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving…' : 'Save Visit'}
-        </button>
-        <button className="btn-ghost" style={{ marginTop: 8 }} onClick={onClose}>Cancel</button>
-      </div>
-    </div>
-  );
-}
-
-function DeliveryFormModal({ onClose, onSaved }) {
-  const [invoiceNo, setInvoiceNo] = useState('');
-  const [deliveredPerson, setDeliveredPerson] = useState('');
-  const [amount, setAmount] = useState('');
-  const [isMySale, setIsMySale] = useState(false);
-  const [pm, setPm] = useState('cash');
-  const [saving, setSaving] = useState(false);
-
-  const handleSave = async () => {
-    if (!invoiceNo.trim() || !deliveredPerson.trim()) return alert('Invoice number and delivered to are required');
-    setSaving(true);
-    try {
-      const loc = await getBrowserLocation();
-      await logDelivery({
-        invoice_number: invoiceNo.trim(), delivered_person: deliveredPerson.trim(),
-        payment_method: pm, amount: Number(amount) || 0, is_sale: isMySale,
-        lat: loc?.lat, lng: loc?.lng,
-      });
-      onSaved();
-    } catch { alert('Failed to save delivery'); }
-    finally { setSaving(false); }
-  };
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" style={{ maxWidth: 460 }} onClick={e => e.stopPropagation()}>
-        <div className="sheet-handle" />
-        <div className="sheet-title">New Delivery</div>
-        <label className="field-label">Invoice Number *</label>
-        <input className="field-input" value={invoiceNo} onChange={e => setInvoiceNo(e.target.value)} placeholder="INV-2026-XXXX" />
-        <label className="field-label">Delivered To *</label>
-        <input className="field-input" value={deliveredPerson} onChange={e => setDeliveredPerson(e.target.value)} placeholder="Person name" />
-        <label className="field-label">Amount (OMR)</label>
-        <input className="field-input" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
-        <label className="check-row">
-          <input type="checkbox" checked={isMySale} onChange={e => setIsMySale(e.target.checked)} /> My Sales — also log this as a sale
-        </label>
-        <label className="field-label">Payment Method *</label>
-        <select className="field-input" value={pm} onChange={e => setPm(e.target.value)}>
-          {PAY_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-        </select>
-        <div className="info-box">Your current browser location will be saved with this delivery, if allowed.</div>
-        <button className="btn-primary" style={{ marginTop: 12 }} onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving…' : 'Save Delivery'}
-        </button>
-        <button className="btn-ghost" style={{ marginTop: 8 }} onClick={onClose}>Cancel</button>
-      </div>
-    </div>
-  );
-}
-
-function SaleFormModal({ onClose, onSaved }) {
-  const [invoiceNo, setInvoiceNo] = useState('');
-  const [deliveredTo, setDeliveredTo] = useState('');
-  const [amount, setAmount] = useState('');
-  const [pm, setPm] = useState('cash');
-  const [saving, setSaving] = useState(false);
-
-  const handleSave = async () => {
-    if (!invoiceNo.trim() || !deliveredTo.trim()) return alert('Invoice number and delivered to are required');
-    setSaving(true);
-    try {
-      await logSale({
-        invoice_number: invoiceNo.trim(), delivered_to: deliveredTo.trim(),
-        amount: Number(amount) || 0, payment_method: pm,
-      });
-      onSaved();
-    } catch { alert('Failed to save sale'); }
-    finally { setSaving(false); }
-  };
-
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="sheet" style={{ maxWidth: 460 }} onClick={e => e.stopPropagation()}>
-        <div className="sheet-handle" />
-        <div className="sheet-title">New Sale Log</div>
-        <label className="field-label">Invoice Number *</label>
-        <input className="field-input" value={invoiceNo} onChange={e => setInvoiceNo(e.target.value)} placeholder="INV-2026-XXXX" />
-        <label className="field-label">Delivered To *</label>
-        <input className="field-input" value={deliveredTo} onChange={e => setDeliveredTo(e.target.value)} placeholder="Person / company name" />
-        <label className="field-label">Amount (OMR)</label>
-        <input className="field-input" type="number" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
-        <label className="field-label">Payment Method *</label>
-        <select className="field-input" value={pm} onChange={e => setPm(e.target.value)}>
-          {PAY_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-        </select>
-        <button className="btn-primary" style={{ marginTop: 12 }} onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving…' : 'Save Sale'}
-        </button>
-        <button className="btn-ghost" style={{ marginTop: 8 }} onClick={onClose}>Cancel</button>
-      </div>
     </div>
   );
 }

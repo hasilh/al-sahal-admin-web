@@ -50,6 +50,15 @@ export const getPaidInvoices = (filter) =>
 export const approvePayment = (id) =>
   request(`/api/deliveries/approve/${id}`, { method: 'PATCH' });
 
+export const adminMarkPaid = (id, payment_method) =>
+  request(`/api/deliveries/admin-mark-paid/${id}`, { method: 'PATCH', body: { payment_method } });
+
+export const approveDeliveryEdit = (id, approve) =>
+  request(`/api/deliveries/approve-edit/${id}`, { method: 'PATCH', body: { approve } });
+
+export const approveVisitEdit = (id, approve) =>
+  request(`/api/visits/${id}/approve-edit`, { method: 'PATCH', body: { approve } });
+
 export const createSalesman = (name, email, password) =>
   request('/api/admin/create-salesman', { method: 'POST', body: { name, email, password } });
 
@@ -65,20 +74,17 @@ export const deleteSalesman = (id) =>
 export const getSalesmanCredentials = (id) =>
   request(`/api/admin/salesmen/${id}/credentials`);
 
-// Sales Log
 export const getSalesLog = (filter, user_id) =>
   request('/api/sales', { params: { filter, user_id } });
 export const getNotPaidSales = () => request('/api/sales/not-paid');
 export const approveSalePayment = (id) =>
   request(`/api/sales/approve/${id}`, { method: 'PATCH' });
 
-// Sales targets
 export const getSalesTarget = (user_id, month) =>
   request('/api/admin/sales-target', { params: { user_id, month } });
 export const setSalesTarget = (user_id, month, target_amount) =>
   request('/api/admin/sales-target', { method: 'POST', body: { user_id, month, target_amount } });
 
-// Per-salesman today/all-time summary
 export const getSalesmanSummary = (id) =>
   request(`/api/admin/salesmen/${id}/summary`);
 
@@ -90,13 +96,20 @@ export const pingLocation = (lat, lng) =>
 
 export const logVisit = (visitData) =>
   request('/api/visits', { method: 'POST', body: visitData });
+export const requestVisitEdit = (id, data) =>
+  request(`/api/visits/${id}/request-edit`, { method: 'PATCH', body: data });
 
 export const logDelivery = (deliveryData) =>
   request('/api/deliveries', { method: 'POST', body: deliveryData });
 export const requestPayment = (id, payment_method) =>
   request(`/api/deliveries/request-payment/${id}`, { method: 'PATCH', body: { payment_method } });
+export const requestDeliveryEdit = (id, data) =>
+  request(`/api/deliveries/request-edit/${id}`, { method: 'PATCH', body: data });
 
 export const logSale = (saleData) =>
   request('/api/sales', { method: 'POST', body: saleData });
 export const requestSalePayment = (id, payment_method) =>
   request(`/api/sales/request-payment/${id}`, { method: 'PATCH', body: { payment_method } });
+
+export const adminMarkPaidSale = (id, payment_method) =>
+  request(`/api/sales/admin-mark-paid/${id}`, { method: 'PATCH', body: { payment_method } });
