@@ -805,9 +805,8 @@ function Dashboard({ onLogout }) {
                       {s.users?.name?.split(' ')[0] || s.salesman_name?.split(' ')[0] || 'Deleted'}
                     </span>
                   </div>
-                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 2px' }}>
-                    Delivered to: {s.delivered_to}
-                  </p>
+{s.company_name && <p style={{ fontSize:12, color:'#5D6D7E', margin:'4px 0 2px' }}>Company: {s.company_name}</p>}
+                  <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>Delivered to: {s.delivered_to}</p>
                   <p style={{ fontSize:12, color:'#5D6D7E', margin:'2px 0' }}>
                     Amount: {Number(s.amount||0).toFixed(2)} OMR
                   </p>
