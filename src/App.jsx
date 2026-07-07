@@ -457,11 +457,16 @@ function Dashboard({ onLogout }) {
     finally { setCredLoading(false); }
   };
 
-  const handleAdminMarkPaid = async () => {
+const handleAdminMarkPaid = async () => {
     const pm = adminPayType === 'cash' ? adminCashType : adminPayType;
     try {
-      await adminMarkPaid(adminPayInv.id, pm);
+      if (adminPayInv._source === 'sales') {
+        await adminMarkPaidSale(adminPayInv.id, pm);
+      } else {
+        await adminMarkPaid(adminPayInv.id, pm);
+      }
       setNotPaid(p => p.filter(i => i.id !== adminPayInv.id));
+      setNotPaidSales(p => p.filter(i => i.id !== adminPayInv.id));
       setAdminPayOpen(false);
       loadPaid(); loadAll();
     } catch { alert('Failed to mark as paid'); }
@@ -886,7 +891,7 @@ function Dashboard({ onLogout }) {
                         ✓ Approve
                       </button>
                     )}
-                    {inv._source === 'delivery' && (
+                    {true && (
                       <button
                         onClick={() => {
                           setAdminPayInv(inv);
