@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import SalesmanDashboard from './SalesmanDashboard.jsx';
 import {
   signin, getToken, saveToken, removeToken,
   getSalesmen, getAllTrackingStatus, getLatestLocations,
@@ -8,6 +9,7 @@ import {
   getSalesLog, getNotPaidSales, approveSalePayment,
   getSalesTarget, setSalesTarget, getSalesmanSummary,
   adminMarkPaid, adminMarkPaidSale, approveVisitEdit, approveDeliveryEdit,
+  getRole, saveRole, removeRole,
 } from './api.js';
 
 const COLORS = ['#8E44AD','#2980B9','#16A085','#D35400','#1A5276','#7D6608'];
@@ -228,23 +230,23 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
 
+const [role, setRole] = useState(getRole());
+
 const handleLogin = async () => {
     if (!email || !password) return setLoginError('Please fill all fields');
     setLoginLoading(true); setLoginError('');
     try {
       const data = await signin(email, password);
-      if (data.role !== 'admin') {
-        setLoginError('This account is a Salesman account. Please use the Al Sahal mobile app to sign in.');
-        return;
-      }
       saveToken(data.token);
+      saveRole(data.role);
+      setRole(data.role);
       setAuthed(true);
     } catch (e) {
       setLoginError(e.data?.error || 'Invalid email or password');
     } finally { setLoginLoading(false); }
   };
 
-  const handleLogout = () => { removeToken(); setAuthed(false); };
+  const handleLogout = () => { removeToken(); removeRole(); setAuthed(false); };
 
   if (!authed) {
     return (
@@ -286,7 +288,9 @@ const handleLogin = async () => {
     );
   }
 
-  return <Dashboard onLogout={handleLogout} />;
+  return role === 'admin'
+    ? <Dashboard onLogout={handleLogout} />
+    : <SalesmanDashboard onLogout={handleLogout} />;
 }
 
 function Dashboard({ onLogout }) {

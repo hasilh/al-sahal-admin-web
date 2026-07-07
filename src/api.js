@@ -3,6 +3,9 @@ const BASE_URL = 'https://al-sahal-tracker-backend.onrender.com';
 export const getToken = () => localStorage.getItem('token');
 export const saveToken = (t) => localStorage.setItem('token', t);
 export const removeToken = () => localStorage.removeItem('token');
+export const saveRole = (r) => localStorage.setItem('role', r);
+export const getRole = () => localStorage.getItem('role');
+export const removeRole = () => localStorage.removeItem('role');
 
 async function request(path, { method = 'GET', body, params } = {}) {
   const token = getToken();
@@ -113,3 +116,5 @@ export const requestSalePayment = (id, payment_method) =>
 
 export const adminMarkPaidSale = (id, payment_method) =>
   request(`/api/sales/admin-mark-paid/${id}`, { method: 'PATCH', body: { payment_method } });
+export const getSalesTargetSelf = () => request('/api/admin/sales-target');
+export const getMyTrackingStatus = () => request('/api/tracking/status');
