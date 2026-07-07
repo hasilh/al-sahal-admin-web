@@ -990,7 +990,7 @@ const handleAdminMarkPaid = async () => {
               : n.type==='edit_request' ? '#2C3E50'
               : '#F39C12'
             }` }}>
-            <p style={{ margin:0, fontSize:13, fontWeight:700, color:'#1A252F' }}>{n.message}</p>
+            <p style={{ margin:0, fontSize:13, fontWeight:700, color:'#1A252F', whiteSpace:'pre-wrap' }}>{n.message}</p>
             <p style={{ margin:'4px 0 0', fontSize:10, color:'#AAB7C4' }}>
               {formatDateFull(n.created_at)}  ·  {timeAgo(n.created_at)}
             </p>
