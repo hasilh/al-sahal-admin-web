@@ -92,8 +92,8 @@ export const getSalesmanSummary = (id) =>
   request(`/api/admin/salesmen/${id}/summary`);
 
 // ── Salesman-facing endpoints ──────────────────────────────────────
-export const setTrackingStatus = (is_tracking) =>
-  request('/api/tracking/status', { method: 'POST', body: { is_tracking } });
+export const setTrackingStatus = (payload) =>
+  request('/api/tracking/status', { method: 'POST', body: payload });
 export const pingLocation = (lat, lng) =>
   request('/api/location/ping', { method: 'POST', body: { lat, lng } });
 

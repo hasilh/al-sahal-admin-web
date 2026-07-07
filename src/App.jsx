@@ -20,7 +20,7 @@ function asUTC(ts) {
   return new Date(iso);
 }
 
-function formatDate(ts) {
+export function formatDate(ts) {
   const src = asUTC(ts);
   if (!src) return '';
   const d = new Date(src.getTime() + (4 * 60 * 60 * 1000));
@@ -82,7 +82,7 @@ const FILTERS = [
   { key:'older', label:'Older' },
 ];
 
-function FilterBar({ selected, onSelect, filters = FILTERS }) {
+export function FilterBar({ selected, onSelect, filters = FILTERS }) {
   return (
     <div style={{ display:'flex', gap:8, overflowX:'auto', padding:'10px 0 6px' }}>
       {filters.map(f => (
@@ -99,7 +99,7 @@ function FilterBar({ selected, onSelect, filters = FILTERS }) {
   );
 }
 
-function SearchInput({ value, onChange, placeholder }) {
+export function SearchInput({ value, onChange, placeholder }) {
   return (
     <input value={value} onChange={e => onChange(e.target.value)}
       placeholder={placeholder || 'Search…'}
@@ -109,7 +109,7 @@ function SearchInput({ value, onChange, placeholder }) {
   );
 }
 
-function Badge({ color, bg, children }) {
+export function Badge({ color, bg, children }) {
   return (
     <span style={{ display:'inline-flex', alignItems:'center', padding:'3px 10px',
       borderRadius:20, background:bg, color, fontSize:11, fontWeight:700 }}>
@@ -118,7 +118,7 @@ function Badge({ color, bg, children }) {
   );
 }
 
-function Card({ children, leftColor }) {
+export function Card({ children, leftColor }) {
   return (
     <div style={{ background:'#fff', borderRadius:16, padding:14, marginBottom:10,
       borderLeft: leftColor ? `4px solid ${leftColor}` : 'none',
@@ -128,7 +128,7 @@ function Card({ children, leftColor }) {
   );
 }
 
-function ModalSheet({ open, onClose, title, children }) {
+export function ModalSheet({ open, onClose, title, children }) {
   if (!open) return null;
   return (
     <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.4)',
@@ -149,7 +149,7 @@ function ModalSheet({ open, onClose, title, children }) {
   );
 }
 
-function FormField({ label, required, children }) {
+export function FormField({ label, required, children }) {
   return (
     <div style={{ marginBottom:12 }}>
       <label style={{ display:'block', fontSize:12, fontWeight:700, color:'#5D6D7E', marginBottom:6 }}>
@@ -160,7 +160,7 @@ function FormField({ label, required, children }) {
   );
 }
 
-function Input({ value, onChange, placeholder, type='text', style={} }) {
+export function Input({ value, onChange, placeholder, type='text', style={} }) {
   return (
     <input value={value} onChange={e => onChange(e.target.value)}
       placeholder={placeholder} type={type}
@@ -170,7 +170,7 @@ function Input({ value, onChange, placeholder, type='text', style={} }) {
   );
 }
 
-function Btn({ onClick, children, color='#C0392B', disabled, style={} }) {
+export function Btn({ onClick, children, color='#C0392B', disabled, style={} }) {
   return (
     <button onClick={onClick} disabled={disabled}
       style={{ width:'100%', height:50, background: disabled ? '#ccc' : color,
@@ -181,7 +181,7 @@ function Btn({ onClick, children, color='#C0392B', disabled, style={} }) {
   );
 }
 
-function InfoBox({ children }) {
+export function InfoBox({ children }) {
   return (
     <div style={{ background:'#FFF8E1', borderRadius:10, padding:10,
       marginTop:8, fontSize:12, color:'#7D6608', lineHeight:1.6 }}>
@@ -190,7 +190,7 @@ function InfoBox({ children }) {
   );
 }
 
-function PayTypeSelector({ type, setType, cashT, setCashT }) {
+export function PayTypeSelector({ type, setType, cashT, setCashT }) {
   return (
     <div>
       <div style={{ display:'flex', gap:8 }}>
@@ -225,12 +225,11 @@ function PayTypeSelector({ type, setType, cashT, setCashT }) {
 
 export default function App() {
   const [authed, setAuthed] = useState(!!getToken());
+  const [role, setRole] = useState(getRole());
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
-
-const [role, setRole] = useState(getRole());
 
 const handleLogin = async () => {
     if (!email || !password) return setLoginError('Please fill all fields');
