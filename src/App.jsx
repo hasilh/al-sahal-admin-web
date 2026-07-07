@@ -228,11 +228,15 @@ export default function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState('');
 
-  const handleLogin = async () => {
+const handleLogin = async () => {
     if (!email || !password) return setLoginError('Please fill all fields');
     setLoginLoading(true); setLoginError('');
     try {
       const data = await signin(email, password);
+      if (data.role !== 'admin') {
+        setLoginError('This account is a Salesman account. Please use the Al Sahal mobile app to sign in.');
+        return;
+      }
       saveToken(data.token);
       setAuthed(true);
     } catch (e) {
