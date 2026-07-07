@@ -7,7 +7,7 @@ import {
   createSalesman, deleteSalesman, getSalesmanCredentials,
   getSalesLog, getNotPaidSales, approveSalePayment,
   getSalesTarget, setSalesTarget, getSalesmanSummary,
-  adminMarkPaid, approveVisitEdit, approveDeliveryEdit,
+  adminMarkPaid, adminMarkPaidSale, approveVisitEdit, approveDeliveryEdit,
 } from './api.js';
 
 const COLORS = ['#8E44AD','#2980B9','#16A085','#D35400','#1A5276','#7D6608'];
