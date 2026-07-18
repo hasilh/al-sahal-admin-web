@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import {
   getVisits, logVisit, requestVisitEdit,
   getDeliveries, logDelivery, requestPayment, requestDeliveryEdit,
-  getSalesLog, logSale, requestSalePayment,
+  getSalesLog, logSale, requestSalePayment, requestSaleEdit, 
   getNotPaidInvoices, getNotPaidSales,
   getSalesTarget, setTrackingStatus,
 } from './api.js';

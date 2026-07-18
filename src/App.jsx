@@ -10,6 +10,7 @@ import {
   getSalesTarget, setSalesTarget, getSalesmanSummary,
   adminMarkPaid, adminMarkPaidSale, approveVisitEdit, approveDeliveryEdit,
   getRole, saveRole, removeRole,
+  deleteVisit, deleteDelivery, deleteSale, approveSaleEdit,
 } from './api.js';
 
 const COLORS = ['#8E44AD','#2980B9','#16A085','#D35400','#1A5276','#7D6608'];
@@ -479,13 +480,23 @@ const handleAdminMarkPaid = async () => {
     } catch { alert('Failed to mark as paid'); }
   };
 
-  const handleApproveEdit = async (type, id, approve) => {
-    try {
-      if (type === 'visit') await approveVisitEdit(id, approve);
-      else await approveDeliveryEdit(id, approve);
-      await loadVisits(); await loadDeliveries();
-    } catch { alert('Failed to process edit'); }
-  };
+const handleApproveEdit = async (type, id, approve) => {
+  try {
+    if (type === 'visit') await approveVisitEdit(id, approve);
+    else if (type === 'sale') await approveSaleEdit(id, approve);
+    else await approveDeliveryEdit(id, approve);
+    await loadVisits(); await loadDeliveries(); await loadSalesLogAll();
+  } catch { alert('Failed to process edit'); }
+};
+
+const handleDelete = async (type, id) => {
+  if (!window.confirm('Delete this record permanently? This cannot be undone.')) return;
+  try {
+    if (type === 'visit') { await deleteVisit(id); await loadVisits(); }
+    if (type === 'delivery') { await deleteDelivery(id); await loadDeliveries(); await loadNotPaid(); await loadPaid(); }
+    if (type === 'sale') { await deleteSale(id); await loadSalesLogAll(); await loadNotPaid(); }
+  } catch { alert('Failed to delete'); }
+};
 
   const handleApprove = async (inv) => {
     if (!window.confirm(`Approve ${inv.invoice_number}?`)) return;
@@ -716,10 +727,15 @@ const handleAdminMarkPaid = async () => {
                       📍 View visit location
                     </button>
                   )}
-                  <EditPendingSection item={v} type="visit" />
-                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
-                    {formatDate(v.visited_at)}
-                  </p>
+<EditPendingSection item={v} type="visit" />
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8 }}>
+                    <p style={{ fontSize:10, color:'#AAB7C4', margin:0 }}>{formatDate(v.visited_at)}</p>
+                    <button onClick={() => handleDelete('visit', v.id)}
+                      style={{ padding:'4px 10px', background:'none', border:'1px solid #EA4335',
+                        borderRadius:8, color:'#EA4335', fontWeight:700, fontSize:11, cursor:'pointer' }}>
+                      🗑 Delete
+                    </button>
+                  </div>
                 </Card>
               );
             })}
@@ -774,10 +790,15 @@ const handleAdminMarkPaid = async () => {
                       📍 View delivery location
                     </button>
                   )}
-                  <EditPendingSection item={d} type="delivery" />
-                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
-                    {formatDate(d.created_at)}
-                  </p>
+<EditPendingSection item={d} type="delivery" />
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8 }}>
+                    <p style={{ fontSize:10, color:'#AAB7C4', margin:0 }}>{formatDate(d.created_at)}</p>
+                    <button onClick={() => handleDelete('delivery', d.id)}
+                      style={{ padding:'4px 10px', background:'none', border:'1px solid #EA4335',
+                        borderRadius:8, color:'#EA4335', fontWeight:700, fontSize:11, cursor:'pointer' }}>
+                      🗑 Delete
+                    </button>
+                  </div>
                 </Card>
               );
             })}
@@ -826,9 +847,15 @@ const handleAdminMarkPaid = async () => {
                     Payment: {pmLabel(s.payment_method)}
                   </p>
                   <Badge color={sc.txt} bg={sc.bg}>{sc.lbl}</Badge>
-                  <p style={{ fontSize:10, color:'#AAB7C4', marginTop:8, marginBottom:0 }}>
-                    {formatDate(s.created_at)}
-                  </p>
+<EditPendingSection item={s} type="sale" />
+                  <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8 }}>
+                    <p style={{ fontSize:10, color:'#AAB7C4', margin:0 }}>{formatDate(s.created_at)}</p>
+                    <button onClick={() => handleDelete('sale', s.id)}
+                      style={{ padding:'4px 10px', background:'none', border:'1px solid #EA4335',
+                        borderRadius:8, color:'#EA4335', fontWeight:700, fontSize:11, cursor:'pointer' }}>
+                      🗑 Delete
+                    </button>
+                  </div>
                 </Card>
               );
             })}

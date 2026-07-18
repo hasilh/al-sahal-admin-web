@@ -118,3 +118,14 @@ export const adminMarkPaidSale = (id, payment_method) =>
   request(`/api/sales/admin-mark-paid/${id}`, { method: 'PATCH', body: { payment_method } });
 export const getSalesTargetSelf = () => request('/api/admin/sales-target');
 export const getMyTrackingStatus = () => request('/api/tracking/status');
+export const deleteVisit = (id) =>
+  request(`/api/visits/${id}`, { method: 'DELETE' });
+export const deleteDelivery = (id) =>
+  request(`/api/deliveries/${id}`, { method: 'DELETE' });
+export const deleteSale = (id) =>
+  request(`/api/sales/${id}`, { method: 'DELETE' });
+
+export const requestSaleEdit = (id, data) =>
+  request(`/api/sales/request-edit/${id}`, { method: 'PATCH', body: data });
+export const approveSaleEdit = (id, approve) =>
+  request(`/api/sales/approve-edit/${id}`, { method: 'PATCH', body: { approve } });
