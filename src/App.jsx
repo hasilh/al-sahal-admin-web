@@ -11,6 +11,7 @@ import {
   adminMarkPaid, adminMarkPaidSale, approveVisitEdit, approveDeliveryEdit,
   getRole, saveRole, removeRole,
   deleteVisit, deleteDelivery, deleteSale, approveSaleEdit,
+  adminEditVisit, adminEditDelivery, adminEditSale,
 } from './api.js';
 
 const COLORS = ['#8E44AD','#2980B9','#16A085','#D35400','#1A5276','#7D6608'];
@@ -337,6 +338,12 @@ function Dashboard({ onLogout }) {
   const [adminPayType, setAdminPayType] = useState('cash');
   const [adminCashType, setAdminCashType] = useState('cash');
 
+  const [adminEditOpen, setAdminEditOpen] = useState(false);
+const [adminEditType, setAdminEditType] = useState(null); // 'visit' | 'delivery' | 'sale'
+const [adminEditItem, setAdminEditItem] = useState(null);
+const [adminEditFields, setAdminEditFields] = useState({});
+const [adminEditSaving, setAdminEditSaving] = useState(false);
+
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -450,13 +457,68 @@ function Dashboard({ onLogout }) {
   };
 
   const handleDeleteSalesman = async (s) => {
-    if (!window.confirm(`Delete ${s.name}? Their records will be kept.`)) return;
-    try {
-      await deleteSalesman(s.id);
-      setDetailOpen(false);
-      await loadAll();
-    } catch { alert('Failed to delete'); }
-  };
+  if (!window.confirm(`Delete ${s.name}? Their records will be kept.`)) return;
+  try {
+    await deleteSalesman(s.id);
+    setDetailOpen(false);
+    await loadAll();
+  } catch { alert('Failed to delete'); }
+};
+
+const openAdminEdit = (type, item) => {
+  setAdminEditType(type);
+  setAdminEditItem(item);
+  if (type === 'visit') {
+    setAdminEditFields({
+      company_name: item.company_name || '', contact_name: item.contact_name || '',
+      mobile: item.mobile || '', email_id: item.email_id || '',
+      quotation: item.quotation || false, quotation_description: item.quotation_description || '',
+    });
+  } else if (type === 'delivery') {
+    setAdminEditFields({
+      invoice_number: item.invoice_number || '', company_name: item.company_name || '',
+      delivered_person: item.delivered_person || '', payment_method: item.payment_method || 'cash',
+    });
+  } else {
+    setAdminEditFields({
+      invoice_number: item.invoice_number || '', company_name: item.company_name || '',
+      delivered_to: item.delivered_to || '', amount: item.amount || 0,
+      payment_method: item.payment_method || 'cash',
+    });
+  }
+  setAdminEditOpen(true);
+};
+
+const handleAdminEditSave = async () => {
+  setAdminEditSaving(true);
+  try {
+    if (adminEditType === 'visit') { await adminEditVisit(adminEditItem.id, adminEditFields); await loadVisits(); }
+    if (adminEditType === 'delivery') { await adminEditDelivery(adminEditItem.id, adminEditFields); await loadDeliveries(); await loadNotPaid(); await loadPaid(); }
+    if (adminEditType === 'sale') { await adminEditSale(adminEditItem.id, adminEditFields); await loadSalesLogAll(); await loadNotPaid(); }
+    setAdminEditOpen(false);
+  } catch { alert('Failed to save changes'); }
+  finally { setAdminEditSaving(false); }
+};
+
+const handleDelete = async (type, id) => {
+  if (!window.confirm('Delete this record permanently? This cannot be undone.')) return;
+  try {
+    if (type === 'visit') await deleteVisit(id);
+    if (type === 'delivery') await deleteDelivery(id);
+    if (type === 'sale') await deleteSale(id);
+  } catch {
+    alert('Failed to delete');
+    return;
+  }
+  // Reload data separately — don't let reload errors trigger a false "failed" alert
+  try {
+    if (type === 'visit') await loadVisits();
+    if (type === 'delivery') { await loadDeliveries(); await loadNotPaid(); await loadPaid(); }
+    if (type === 'sale') { await loadSalesLogAll(); await loadNotPaid(); }
+  } catch (e) {
+    console.log('Reload after delete failed silently:', e);
+  }
+};
 
   const handleViewCredentials = async (s) => {
     setCredLoading(true); setCredentials(null);
@@ -487,15 +549,6 @@ const handleApproveEdit = async (type, id, approve) => {
     else await approveDeliveryEdit(id, approve);
     await loadVisits(); await loadDeliveries(); await loadSalesLogAll();
   } catch { alert('Failed to process edit'); }
-};
-
-const handleDelete = async (type, id) => {
-  if (!window.confirm('Delete this record permanently? This cannot be undone.')) return;
-  try {
-    if (type === 'visit') { await deleteVisit(id); await loadVisits(); }
-    if (type === 'delivery') { await deleteDelivery(id); await loadDeliveries(); await loadNotPaid(); await loadPaid(); }
-    if (type === 'sale') { await deleteSale(id); await loadSalesLogAll(); await loadNotPaid(); }
-  } catch { alert('Failed to delete'); }
 };
 
   const handleApprove = async (inv) => {
@@ -730,11 +783,18 @@ const handleDelete = async (type, id) => {
 <EditPendingSection item={v} type="visit" />
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:8 }}>
                     <p style={{ fontSize:10, color:'#AAB7C4', margin:0 }}>{formatDate(v.visited_at)}</p>
-                    <button onClick={() => handleDelete('visit', v.id)}
-                      style={{ padding:'4px 10px', background:'none', border:'1px solid #EA4335',
-                        borderRadius:8, color:'#EA4335', fontWeight:700, fontSize:11, cursor:'pointer' }}>
-                      🗑 Delete
-                    </button>
+<div style={{ display:'flex', gap:6 }}>
+                      <button onClick={() => openAdminEdit('visit', v)}
+                        style={{ padding:'4px 10px', background:'none', border:'1px solid #2C3E50',
+                          borderRadius:8, color:'#2C3E50', fontWeight:700, fontSize:11, cursor:'pointer' }}>
+                        ✏️ Edit
+                      </button>
+                      <button onClick={() => handleDelete('visit', v.id)}
+                        style={{ padding:'4px 10px', background:'none', border:'1px solid #EA4335',
+                          borderRadius:8, color:'#EA4335', fontWeight:700, fontSize:11, cursor:'pointer' }}>
+                        🗑 Delete
+                      </button>
+                    </div>
                   </div>
                 </Card>
               );
@@ -1273,7 +1333,60 @@ const handleDelete = async (type, id) => {
         <InfoBox>
           This will immediately move the invoice to Paid without salesman action.
         </InfoBox>
-        <Btn onClick={handleAdminMarkPaid}>Confirm & Move to Paid</Btn>
+<Btn onClick={handleAdminMarkPaid}>Confirm & Move to Paid</Btn>
+      </ModalSheet>
+
+      {/* ── Admin Direct Edit Modal ── */}
+      <ModalSheet open={adminEditOpen} onClose={() => setAdminEditOpen(false)} title="Edit Record">
+  {adminEditType === 'visit' && (
+    <>
+      <FormField label="Company Name"><Input value={adminEditFields.company_name} onChange={v => setAdminEditFields(f => ({ ...f, company_name: v }))} /></FormField>
+      <FormField label="Contact Name"><Input value={adminEditFields.contact_name} onChange={v => setAdminEditFields(f => ({ ...f, contact_name: v }))} /></FormField>
+      <FormField label="Mobile"><Input value={adminEditFields.mobile} onChange={v => setAdminEditFields(f => ({ ...f, mobile: v }))} /></FormField>
+      <FormField label="Email"><Input value={adminEditFields.email_id} onChange={v => setAdminEditFields(f => ({ ...f, email_id: v }))} /></FormField>
+      <FormField label="Quotation Required?">
+        <input type="checkbox" checked={adminEditFields.quotation} onChange={e => setAdminEditFields(f => ({ ...f, quotation: e.target.checked }))} />
+      </FormField>
+      {adminEditFields.quotation && (
+        <FormField label="Quotation Details">
+          <textarea value={adminEditFields.quotation_description} onChange={e => setAdminEditFields(f => ({ ...f, quotation_description: e.target.value }))}
+            style={{ width:'100%', minHeight:70, padding:10, borderRadius:12, border:'1px solid #E8EAED', boxSizing:'border-box' }} />
+        </FormField>
+      )}
+    </>
+  )}
+  {adminEditType === 'delivery' && (
+    <>
+      <FormField label="Invoice Number"><Input value={adminEditFields.invoice_number} onChange={v => setAdminEditFields(f => ({ ...f, invoice_number: v }))} /></FormField>
+      <FormField label="Company Name"><Input value={adminEditFields.company_name} onChange={v => setAdminEditFields(f => ({ ...f, company_name: v }))} /></FormField>
+      <FormField label="Delivered To"><Input value={adminEditFields.delivered_person} onChange={v => setAdminEditFields(f => ({ ...f, delivered_person: v }))} /></FormField>
+      <FormField label="Payment Method">
+        <select value={adminEditFields.payment_method} onChange={e => setAdminEditFields(f => ({ ...f, payment_method: e.target.value }))}
+          style={{ width:'100%', padding:10, borderRadius:12, border:'1px solid #E8EAED' }}>
+          <option value="cash">Cash</option><option value="bank">Bank Transfer</option>
+          <option value="credit">Credit</option><option value="not_paid">Not Paid</option>
+        </select>
+      </FormField>
+    </>
+  )}
+  {adminEditType === 'sale' && (
+    <>
+      <FormField label="Invoice Number"><Input value={adminEditFields.invoice_number} onChange={v => setAdminEditFields(f => ({ ...f, invoice_number: v }))} /></FormField>
+      <FormField label="Company Name"><Input value={adminEditFields.company_name} onChange={v => setAdminEditFields(f => ({ ...f, company_name: v }))} /></FormField>
+      <FormField label="Delivered To"><Input value={adminEditFields.delivered_to} onChange={v => setAdminEditFields(f => ({ ...f, delivered_to: v }))} /></FormField>
+      <FormField label="Amount (OMR)"><Input value={adminEditFields.amount} onChange={v => setAdminEditFields(f => ({ ...f, amount: v }))} type="number" /></FormField>
+      <FormField label="Payment Method">
+        <select value={adminEditFields.payment_method} onChange={e => setAdminEditFields(f => ({ ...f, payment_method: e.target.value }))}
+          style={{ width:'100%', padding:10, borderRadius:12, border:'1px solid #E8EAED' }}>
+          <option value="cash">Cash</option><option value="bank">Bank Transfer</option>
+          <option value="credit">Credit</option><option value="not_paid">Not Paid</option>
+        </select>
+      </FormField>
+    </>
+  )}
+<Btn onClick={handleAdminEditSave} disabled={adminEditSaving}>
+          {adminEditSaving ? 'Saving…' : 'Save Changes'}
+        </Btn>
       </ModalSheet>
 
     </div>

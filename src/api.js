@@ -129,3 +129,10 @@ export const requestSaleEdit = (id, data) =>
   request(`/api/sales/request-edit/${id}`, { method: 'PATCH', body: data });
 export const approveSaleEdit = (id, approve) =>
   request(`/api/sales/approve-edit/${id}`, { method: 'PATCH', body: { approve } });
+
+export const adminEditVisit = (id, data) =>
+  request(`/api/visits/${id}/admin-edit`, { method: 'PATCH', body: data });
+export const adminEditDelivery = (id, data) =>
+  request(`/api/deliveries/${id}/admin-edit`, { method: 'PATCH', body: data });
+export const adminEditSale = (id, data) =>
+  request(`/api/sales/${id}/admin-edit`, { method: 'PATCH', body: data });
